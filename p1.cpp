@@ -37,6 +37,8 @@ struct MyApp : public App {
   // each Nav is a navigator: it has a position, orientation (quaternion), and movement methods
   std::vector<Nav> agent; // this creates a list of Nav's which is currently empty
 
+  std::vector<int> lover;
+
   // GUI setup - registers the three parameters so they show up as interactive controls
   void onInit() override {
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
@@ -47,12 +49,29 @@ struct MyApp : public App {
   }
   
   // initialize agents
+  // void reset(int n) {
+  //   agent.clear();
+  //   agent.resize(n);
+  
+  //   for (auto& a : agent) {
+  //     a.pos(Vec3d(rs(), rs(), rs()));
+  //     a.quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+  //   }
+  // }
+
   void reset(int n) {
     agent.clear();
     agent.resize(n);
-    for (auto& a : agent) {
-      a.pos(Vec3d(rs(), rs(), rs()));
-      a.quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+    lover.clear();       // add this
+    lover.resize(n);     // add this
+    for (int i = 0; i < n; i++) {
+      agent[i].pos(Vec3d(rs(), rs(), rs()));
+      agent[i].quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+      int j;
+      do {
+        j = rnd::uniform(0, n - 1);
+      } while (j == i);
+      lover[i] = j;      // add this
     }
   }
 
@@ -109,21 +128,37 @@ struct MyApp : public App {
       }
     }
 
-    for (int i = 0; i < agent.size(); i++) { // iterate throught the navs
-      auto& me = agent[i]; // assign current nav to variable me 
-      int j;
-      do {
-        j = rnd::uniform(0, (int)agent.size() - 1);
-      } while (j == i); // keep finding a random value for j within the size of the nav list if j is equal to i 
-      auto& them = agent[j];
-
-      me.nudgeToward(them.pos(), 0.01);
-      me.moveF(0.7);
-    }
     
+
+    // only want to generate the random pairings once during the program but to access these assigned
+    // agents through out the program. So create a list that's out of the loops 
+    // for (int i = 0; i < agent.size(); i++) { // iterate throught the navs
+    //   auto& me = agent[i]; // assign current nav to variable me 
+    //   int j;
+    //   do {
+    //     j = rnd::uniform(0, (int)agent.size() - 1);
+    //   } while (j == i); // keep finding a random value for j within the size of the nav list if j is equal to i 
+
+    //   lover[j] = i; // "remember" who we love
+    // }
+
+    //   auto& them = agent[j];
+
+    //   //me.faceToward(them.pos(), 0.05);
+    //   me.nudgeToward(them.pos(), 0.01);
+    //   me.moveF(0.7);
+    // }
+    
+    for (int i = 0; i < agent.size(); i++) {
+      auto& me = agent[i];
+      auto& them = agent[lover[i]];
+
+      me.faceToward(them.pos(), 0.1);
+    }
+
     // movement
     for (auto& a : agent) {
-      a.turnR(0.035); // rotate slightly to the right each frame
+      //a.turnR(0.035); // rotate slightly to the right each frame
       a.moveF(0.7); // move forward (along facing direction)
     }
 

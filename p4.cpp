@@ -1,5 +1,4 @@
-// used AI to get this answer - ran out of time 
-// https://claude.ai/share/7604f552-96d9-404c-8e19-da889cbcdc15
+// part me, part AI https://claude.ai/share/f46ee9f0-a205-44ea-b766-c2149c5173af
 
 #include <iostream>
 
@@ -13,9 +12,14 @@ using namespace al;
 float r() { return rnd::uniform(); } // random float 0.0 -> 1.0
 float rs() { return rnd::uniformS(); } // scatters agents in both positive and negative directions (-1 -> 1 (sined))
 
+struct Food {
+  Vec3f pos;
+  bool active;
+};
+
 struct MyApp : public App {
   ParameterInt N{"/N", "", 10, 2, 100}; // number of agents
-
+  ParameterInt F{"/F", "", 1, 0, 10};
   ParameterInt K{"/K", "", 7, 1, 20}; // max neighbors
   Parameter T{"/T", "", 1.5, 0.1, 5.0}; // neighbor detection radius
   Parameter separationDist{"/sep", "", 0.5, 0.01, 2.0}; // distance at which agents repel
@@ -25,6 +29,9 @@ struct MyApp : public App {
   Parameter separationStrength{"/separation", "", 0.05, 0.001, 0.2}; // how strongly agent avoid crowding
   Parameter moveSpeed{"/speed", "", 0.02, 0.001, 0.2};// forward speed each frame          
   ParameterColor color{"/color"}; //background color
+  Parameter foodRadius{"/fr", 1.5, 0.1, 5.0};
+  Parameter foodEatRadius{"/foodEat", "", 0.2, 0.01, 1.0};
+  Parameter foodAttrStrength{"/foodAttr", "", 0.03, 0.001, 0.2};
 
   // lighting setup for 3d rendering
   Light light;
@@ -33,14 +40,20 @@ struct MyApp : public App {
   // shared 3d shape drawn for every agent
   Mesh mesh;
 
+  //mesh for food
+  Mesh foodMesh;
+
   // each Nav is a navigator: it has a position, orientation (quaternion), and movement methods
   std::vector<Nav> agent; // this creates a list of Nav's which is currently empty
+
+  std::vector<Food> food;   
 
   // GUI setup - registers the three parameters so they show up as interactive controls
   void onInit() override {
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
     auto &gui = GUIdomain->newGUI();
     gui.add(N);
+    gui.add(F);
     gui.add(K);
     gui.add(T);
     gui.add(separationDist);
@@ -50,6 +63,9 @@ struct MyApp : public App {
     gui.add(separationStrength); 
     gui.add(moveSpeed);
     gui.add(color);
+    gui.add(foodRadius);
+    gui.add(foodEatRadius);
+    gui.add(foodAttrStrength);
   }
   
   // // initialize agents
@@ -64,12 +80,24 @@ struct MyApp : public App {
 
   // Clears the old agent list, creates n new ones, and gives each 
   // a random position and a random facing direction.
-  void reset(int n) {
+  void resetAgent(int n) {
     agent.clear();
     agent.resize(n);    
     for (int i = 0; i < n; i++) {
       agent[i].pos(Vec3d(rs(), rs(), rs())); // random position in [-1,1]³
       agent[i].quat(Quatd(Vec3d(rs(), rs(), rs())).normalize()); // random orientation
+    }
+  }
+
+  // reset the food
+  void resetFood(int f) {
+    food.clear();
+    food.resize(f);
+    for (int i = 0; i < f; i++) {
+      food[i].pos.x = rs();
+      food[i].pos.y = rs();
+      food[i].pos.z = rs();
+      food[i].active = true;
     }
   }
 
@@ -80,8 +108,13 @@ struct MyApp : public App {
     mesh.scale(0.2); // make it small overall
     mesh.generateNormals(); // needed for lighting to work correctly
 
+    addSphere(foodMesh, 0.1); // small sphere mesh for food;
+    foodMesh.generateNormals();
+
     nav().pos(0, 0, 6); // place the camera 6 units back on the Z axis
     light.pos(-2, 7, 0); // position the light above-left
+
+    resetFood(20); // spawn 20 food items at start
   }
 
   // per-frame logic
@@ -90,9 +123,8 @@ struct MyApp : public App {
   void onAnimate(double dt) override {
     if (N != lastN) {
       lastN = N;
-      reset(N); // re-initialize agents if N slider changed
+      resetAgent(N); // re-initialize agents if N slider changed
     }
-
     // NEW: flocking loop (replaces all old love/neighbor loops)
     for (int i = 0; i < (int)agent.size(); i++) {
       auto& me = agent[i];
@@ -145,12 +177,30 @@ struct MyApp : public App {
         if (separationForce.mag() > 0.0001f) {
           me.pos(me.pos() + separationForce * (float)separationStrength);
         }
-      }
 
+        // food
+        for (int j = 0; j < (int)food.size(); j++) {
+          if (!food[j].active) continue;
+          Vec3f diff = food[j].pos - me.pos();
+          float dist = diff.mag();
+
+          if (dist < foodRadius) {
+            // AI
+            // nudge agent toward food
+            me.pos(me.pos() + diff.normalize() * (float)foodAttrStrength);
+            // eat the food if close enough
+            if (dist < foodEatRadius) {
+              food[j].active = false;          // mark as eaten
+              food[j].pos = Vec3f(rs(), rs(), rs()); // respawn at random position
+              food[j].active = true;           // reactivate
+            }
+          }
+        }
+      }
       // move forward
       me.pos(me.pos() + me.uf() * (float)moveSpeed);
 
-      // NEW: wrap around
+      // wrap around - AI
       Vec3f p = me.pos();
       float ws = worldSize;
       if (p.x >  ws) p.x -= 2 * ws;
@@ -189,6 +239,14 @@ struct MyApp : public App {
       g.rotate(a.quat()); // orient to agent's facing direction
       g.draw(mesh); // draw the cone
       g.popMatrix(); // restore transform
+    }
+
+    for (auto& f : food) {
+      if (!f.active) continue;
+      g.pushMatrix();
+      g.translate(f.pos);
+      g.draw(foodMesh);
+      g.popMatrix();
     }
   }
 };

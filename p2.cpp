@@ -31,6 +31,8 @@ struct MyApp : public App {
   // each Nav is a navigator: it has a position, orientation (quaternion), and movement methods
   std::vector<Nav> agent; // this creates a list of Nav's which is currently empty
 
+  std::vector<int> lover;
+
   // GUI setup - registers the three parameters so they show up as interactive controls
   void onInit() override {
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
@@ -40,13 +42,29 @@ struct MyApp : public App {
     gui.add(neighbor_distance);
   }
   
-  // initialize agents
+  // // initialize agents
+  // void reset(int n) {
+  //   agent.clear();
+  //   agent.resize(n);
+  //   for (auto& a : agent) {
+  //     a.pos(Vec3d(rs(), rs(), rs()));
+  //     a.quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+  //   }
+  // }
+
   void reset(int n) {
     agent.clear();
     agent.resize(n);
-    for (auto& a : agent) {
-      a.pos(Vec3d(rs(), rs(), rs()));
-      a.quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+    lover.clear();    
+    lover.resize(n);     
+    for (int i = 0; i < n; i++) {
+      agent[i].pos(Vec3d(rs(), rs(), rs()));
+      agent[i].quat(Quatd(Vec3d(rs(), rs(), rs())).normalize());
+      int j;
+      do {
+        j = rnd::uniform(0, n - 1);
+      } while (j == i);
+      lover[i] = j;      // add this
     }
   }
 
@@ -104,41 +122,53 @@ struct MyApp : public App {
     }
 
     // random falling in love
-    for (int i = 0; i < agent.size(); i++) { // iterate throught the navs
-      auto& me = agent[i]; // assign current nav to variable me 
-      int j;
-      do {
-        j = rnd::uniform(0, (int)agent.size() - 1);
-      } while (j == i); // keep finding a random value for j within the size of the nav list if j is equal to i 
-      auto& them = agent[j];
+    // for (int i = 0; i < agent.size(); i++) { // iterate throught the navs
+    //   auto& me = agent[i]; // assign current nav to variable me 
+    //   int j;
+    //   do {
+    //     j = rnd::uniform(0, (int)agent.size() - 1);
+    //   } while (j == i); // keep finding a random value for j within the size of the nav list if j is equal to i 
+    //   auto& them = agent[j];
 
-      me.nudgeToward(them.pos(), 0.01);
-      me.moveF(0.7);
+    //   me.nudgeToward(them.pos(), 0.01);
+    //   me.moveF(0.7);
+    // }
+
+    for (int i = 0; i < agent.size(); i++) {
+      auto& me = agent[i];
+      auto& them = agent[lover[i]];
+
+      me.faceToward(them.pos(), 0.1);
+              // me versus them
+      float distance = (me.pos() - them.pos()).mag(); // Euclidean distance
+      if (distance < neighbor_distance) {
+        me.nudgeToward(them.pos(), -0.1);
+      }
     }
 
     // give some room
     // for each agent, search through all other agents to find those that are closer than some threshold value
     // nudge away from these close neighbors
-    for (int i = 0; i < agent.size(); i++) {
-      auto& me = agent[i];
-      for (int j = 0; j < agent.size(); j++) {
-        if (i == j) { // skip self-comparison
-          continue;
-        }
+    // for (int i = 0; i < agent.size(); i++) {
+    //   auto& me = agent[i];
+    //   for (int j = 0; j < agent.size(); j++) {
+    //     if (i == j) { // skip self-comparison
+    //       continue;
+    //     }
 
-        auto& them = agent[j];
+    //     auto& them = agent[j];
 
-        // me versus them
-        float distance = (me.pos() - them.pos()).mag(); // Euclidean distance
-        if (distance < neighbor_distance) {
-          me.nudgeToward(them.pos(), -0.1);
-        }
-      }
-    }
+    //     // me versus them
+    //     float distance = (me.pos() - them.pos()).mag(); // Euclidean distance
+    //     if (distance < neighbor_distance) {
+    //       me.nudgeToward(them.pos(), -0.1);
+    //     }
+    //   }
+    // }
     
     // movement
     for (auto& a : agent) {
-      a.turnR(0.035); // rotate slightly to the right each frame
+      //a.turnR(0.035); // rotate slightly to the right each frame
       a.moveF(0.7); // move forward (along facing direction)
     }
 
