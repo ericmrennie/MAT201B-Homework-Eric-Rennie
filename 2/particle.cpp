@@ -9,6 +9,7 @@ using namespace al;
 
 #include <fstream> // opens and reads GLSL shader files
 #include <vector> // resizable array type
+#include <cmath> // math
 using namespace std;
 
 // creates a random 3D vector where each component is in [-1, 1], then scales it.
@@ -22,6 +23,8 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 
 // Declares three GUI-controllable parameters with {name, group, default, min, max}. These show up as sliders at runtime.
 struct AlloApp : App {
+  Parameter coulombs{"/coulombs", "", 0.0, 0.0, 0.2};
+  Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
   Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
   Parameter timeStep{"/timeStep", "", 0.1, 0.01, 0.6};
   Parameter dragFactor{"/dragFactor", "", 0.1, 0.0, 0.9};
@@ -42,6 +45,8 @@ struct AlloApp : App {
     // set up GUI
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
     auto &gui = GUIdomain->newGUI();
+    gui.add(coulombs);
+    gui.add(springForce);
     gui.add(pointSize);  // add parameter to GUI
     gui.add(timeStep);   // add parameter to GUI
     gui.add(dragFactor);   // add parameter to GUI
@@ -126,7 +131,7 @@ struct AlloApp : App {
       // calculate spring force between this particle and the origin
 
       auto& me = mesh.vertices()[i];
-      float k = 0.5;
+      float k = springForce;
       float displacement = me.mag() - 5.0;
       force[i] += me.normalize() * (-k * displacement);
     }
@@ -138,10 +143,16 @@ struct AlloApp : App {
     // Calculate repulsive forces....
     //
     for (int i = 0; i < mesh.vertices().size(); ++i) {
+      auto& chargeOne = mesh.vertices()[i];
       for (int j = i + 1; j < mesh.vertices().size(); ++j) {
+        auto& chargeTwo = mesh.vertices()[j];
         // i and j are a pair
         // limit large forces... if the force is too large, ignore it
-
+        float k = coulombs;
+        float distance = (chargeTwo - chargeOne).mag();
+        Vec3f direction = (chargeTwo - chargeOne).normalize();
+        force[i] += direction * (k / pow(distance, 2));
+        force[j] -= direction * (k / pow(distance, 2));
       }
     }
 
