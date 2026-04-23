@@ -10,6 +10,8 @@ using namespace al;
 #include <fstream> // opens and reads GLSL shader files
 #include <vector> // resizable array type
 #include <cmath> // math
+#include <random> // random
+#include <iostream> // for console logs
 using namespace std;
 
 // creates a random 3D vector where each component is in [-1, 1], then scales it.
@@ -39,6 +41,7 @@ struct AlloApp : App {
   vector<Vec3f> velocity;
   vector<Vec3f> force;
   vector<float> mass;
+  vector<int> love;
 
   // runs before window opens. Sets up the GUI panel and registers the three sliders
   void onInit() override {
@@ -71,8 +74,9 @@ struct AlloApp : App {
     mesh.primitive(Mesh::POINTS);
     // does 1000 work on your system? how many can you make before you get a low
     // frame rate? do you need to use <1000?
-    int count = 0;
-    while (count < 500) {
+        // love population
+    int count1 = 0;
+    while (count1 < 500) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
       if (v.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
 
@@ -92,10 +96,20 @@ struct AlloApp : App {
       force.push_back(randomVec3f(1)); // random initial force kick
 
       // increment count
-      count++;
+      count1++;
     }
 
     nav().pos(0, 0, 10); // place camera 10 units back
+
+    // populating love vector
+    int count2 = 0;
+    while (count2 < mesh.vertices().size()) {
+      int crush = rnd::uniform(mesh.vertices().size());
+      if (crush == count2) continue;
+      love.push_back(crush);
+      count2++;
+    }
+    std::cout << love.size() << std::endl;
   }
 
   // spacebar toggles this - pauses the whole simulation
@@ -150,11 +164,13 @@ struct AlloApp : App {
         // limit large forces... if the force is too large, ignore it
         float k = coulombs;
         float distance = (chargeTwo - chargeOne).mag();
+        if (distance < 0.01) continue;
         Vec3f direction = (chargeTwo - chargeOne).normalize();
         force[i] += direction * (k / pow(distance, 2));
         force[j] -= direction * (k / pow(distance, 2));
       }
     }
+
 
 ///////// you probably do not need to edit the rest of this method...
 
