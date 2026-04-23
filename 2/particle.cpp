@@ -74,9 +74,8 @@ struct AlloApp : App {
     mesh.primitive(Mesh::POINTS);
     // does 1000 work on your system? how many can you make before you get a low
     // frame rate? do you need to use <1000?
-        // love population
-    int count1 = 0;
-    while (count1 < 500) {
+    int count = 0;
+    while (count < 500) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
       if (v.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
 
@@ -95,21 +94,16 @@ struct AlloApp : App {
       velocity.push_back(randomVec3f(0.1)); // small random initial velocity
       force.push_back(randomVec3f(1)); // random initial force kick
 
+      // populating love vector
+      int crush = rnd::uniform(mesh.vertices().size());
+      if (crush == count) continue;
+      love.push_back(crush);
+
       // increment count
-      count1++;
+      count++;
     }
 
     nav().pos(0, 0, 10); // place camera 10 units back
-
-    // populating love vector
-    int count2 = 0;
-    while (count2 < mesh.vertices().size()) {
-      int crush = rnd::uniform(mesh.vertices().size());
-      if (crush == count2) continue;
-      love.push_back(crush);
-      count2++;
-    }
-    std::cout << love.size() << std::endl;
   }
 
   // spacebar toggles this - pauses the whole simulation
@@ -119,12 +113,6 @@ struct AlloApp : App {
     if (freeze) return;
 
     // 
-
-    // XXX you put code here that calculates spring forces and sets
-    // accelerations These are pair-wise. Each unique pairing of two particles
-    // These are equal but opposite: A exerts a force on B while B exerts that
-    // same amount of force on A (but in the opposite direction!) Use a nested
-    // for loop to visit each pair once The time complexity is O(n*n)
     //
     // Vec3f has lots of operations you might use...
     // • +=
@@ -169,6 +157,13 @@ struct AlloApp : App {
         force[i] += direction * (k / pow(distance, 2));
         force[j] -= direction * (k / pow(distance, 2));
       }
+    }
+
+    // love attraction logic
+    for (int i = 0; i < mesh.vertices().size(); i++) {
+      auto& me = mesh.vertices()[i];
+      auto& crush = love[i];
+      
     }
 
 
