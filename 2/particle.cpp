@@ -1,0 +1,217 @@
+// Karl Yerkes
+// 2022-01-20
+
+#include "al/app/al_App.hpp"
+#include "al/app/al_GUIDomain.hpp"
+#include "al/math/al_Random.hpp"
+
+using namespace al;
+
+#include <fstream> // opens and reads GLSL shader files
+#include <vector> // resizable array type
+using namespace std;
+
+// creates a random 3D vector where each component is in [-1, 1], then scales it.
+// uniformS means "uniform, signed" (includes negatives)
+
+Vec3f randomVec3f(float scale) {
+  return Vec3f(rnd::uniformS(), rnd::uniformS(), rnd::uniformS()) * scale;
+}
+
+string slurp(string fileName);  // forward declaration - full definition is at the bottom. Reads an entire file into a string (used to load GLSL shaders)
+
+// Declares three GUI-controllable parameters with {name, group, default, min, max}. These show up as sliders at runtime.
+struct AlloApp : App {
+  Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
+  Parameter timeStep{"/timeStep", "", 0.1, 0.01, 0.6};
+  Parameter dragFactor{"/dragFactor", "", 0.1, 0.0, 0.9};
+
+  // state variables
+  ShaderProgram pointShader; // the GLSL program that draws particles
+
+  //  simulation state
+  Mesh mesh;  // position *is inside the mesh* mesh.vertices() are the positions. stores positions and colors
+
+  // parallel arrays - one entry per particle
+  vector<Vec3f> velocity;
+  vector<Vec3f> force;
+  vector<float> mass;
+
+  // runs before window opens. Sets up the GUI panel and registers the three sliders
+  void onInit() override {
+    // set up GUI
+    auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
+    auto &gui = GUIdomain->newGUI();
+    gui.add(pointSize);  // add parameter to GUI
+    gui.add(timeStep);   // add parameter to GUI
+    gui.add(dragFactor);   // add parameter to GUI
+    //
+  }
+
+  // loads and compiles the three shader stages (vertex -> geometry -> fragment) from files
+  void onCreate() override {
+    // compile shaders
+    pointShader.compile(slurp("../point-vertex.glsl"),
+                        slurp("../point-fragment.glsl"),
+                        slurp("../point-geometry.glsl"));
+
+    // set initial conditions of the simulation
+    //
+
+    // c++11 "lambda" function
+    // A lambda that returns a fully-saturated, full-brightness color with a random hue.
+    auto randomColor = []() { return HSV(rnd::uniform(), 1.0f, 1.0f); };
+
+    // spawns 500 particles with randomized positions, colors, masses, velocities, and initial forces
+    mesh.primitive(Mesh::POINTS);
+    // does 1000 work on your system? how many can you make before you get a low
+    // frame rate? do you need to use <1000?
+    int count = 0;
+    while (count < 500) {
+      Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
+      if (v.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
+
+      mesh.vertex(v);
+      mesh.color(randomColor()); // random hue
+
+      // float m = rnd::uniform(3.0, 0.5);
+      float m = 3 + rnd::normal() / 2; // mass: normally distributed around 3
+      if (m < 0.5) m = 0.5; // clamp minimum mass
+      mass.push_back(m);
+
+      // using a simplified volume/size relationship
+      mesh.texCoord(pow(m, 1.0f / 3), 0);  // s, t // encode size as cube root of mass (volume -> radius)
+
+      // separate state arrays
+      velocity.push_back(randomVec3f(0.1)); // small random initial velocity
+      force.push_back(randomVec3f(1)); // random initial force kick
+
+      // increment count
+      count++;
+    }
+
+    nav().pos(0, 0, 10); // place camera 10 units back
+  }
+
+  // spacebar toggles this - pauses the whole simulation
+  bool freeze = false;
+  // the simulation loop
+  void onAnimate(double dt) override {
+    if (freeze) return;
+
+    // 
+
+    // XXX you put code here that calculates spring forces and sets
+    // accelerations These are pair-wise. Each unique pairing of two particles
+    // These are equal but opposite: A exerts a force on B while B exerts that
+    // same amount of force on A (but in the opposite direction!) Use a nested
+    // for loop to visit each pair once The time complexity is O(n*n)
+    //
+    // Vec3f has lots of operations you might use...
+    // • +=
+    // • -=
+    // • +
+    // • -
+    // • .normalize() ~ Vec3f points in the direction as it did, but has length 1
+    // • .normalize(float scale) ~ same but length `scale`
+    // • .mag() ~ length of the Vec3f
+    // • .magSqr() ~ squared length of the Vec3f
+    // • .dot(Vec3f f) 
+    // • .cross(Vec3f f)
+
+    // this loop is a STUB. It accesses each particle's position and computes its distance 
+    // from the origin, but doesn't do anything with that value yet. 
+    // THIS IS WHERE YOU'D ADD SPRING-TOWARD-ORIGIN-FORCES
+    for (int i = 0; i < velocity.size(); i++) {
+      // calculate spring force between this particle and the origin
+
+      auto& me = mesh.vertices()[i];
+      float k = 0.5;
+      float displacement = me.mag() - 5.0;
+      force[i] += me.normalize() * (-k * displacement);
+    }
+
+
+    // ANOTHER STUB - nested loop visits every unique particle pair exactly once 
+    // (note j = i + 1 avoids duplicates)
+    // THIS IS WHERE YOU'D ADD PAIRWISE REPULSION FORCES
+    // Calculate repulsive forces....
+    //
+    for (int i = 0; i < mesh.vertices().size(); ++i) {
+      for (int j = i + 1; j < mesh.vertices().size(); ++j) {
+        // i and j are a pair
+        // limit large forces... if the force is too large, ignore it
+
+      }
+    }
+
+///////// you probably do not need to edit the rest of this method...
+
+    // viscous drag
+    // drag is a force opposing the current velocity, proportional to speed
+    // slows particles down over time
+    for (int i = 0; i < velocity.size(); i++) {
+      force[i] += - velocity[i] * dragFactor; // viscous drag: F = -bv
+    }
+
+    // Numerical Integration
+    //
+    vector<Vec3f> &position(mesh.vertices());
+    for (int i = 0; i < velocity.size(); i++) {
+      // "semi-implicit" Euler integration
+      // updates velocity first using the new force, then updates position using the new velocity. More stable than plain Euler.
+      velocity[i] += force[i] / mass[i] * timeStep;
+      position[i] += velocity[i] * timeStep;
+    }
+
+    // clear all accelerations (IMPORTANT!!)
+    // otherwise forces accumulate across frames
+    for (auto &a : force) a.set(0);
+  }
+
+  bool onKeyDown(const Keyboard &k) override {
+    // pauses/unpauses simulation
+    if (k.key() == ' ') {
+      freeze = !freeze;
+    }
+
+    if (k.key() == '1') {
+      // introduce some "random" forces - useful for testing
+      for (int i = 0; i < velocity.size(); i++) {
+        // F = ma
+        force[i] += randomVec3f(1);
+      }
+    }
+
+    return true;
+  }
+
+  // clears the screen, activates the point shader, draws all particles
+  void onDraw(Graphics &g) override {
+    g.clear(0.3); // dark grey background
+    g.shader(pointShader);
+    g.shader().uniform("pointSize", pointSize / 100); // pass slider value to shader
+    g.blending(true);
+    g.blendTrans(); // transparency blending
+    g.depthTesting(true);
+    g.draw(mesh);
+  }
+};
+
+int main() {
+  AlloApp app;
+  app.configureAudio(48000, 512, 2, 0);
+  app.start();
+}
+
+// Reads a file line by line and concatenates everything into one string. Used to feed the GLSL shader source code to the compiler.
+string slurp(string fileName) {
+  fstream file(fileName);
+  string returnValue = "";
+  while (file.good()) {
+    string line;
+    getline(file, line);
+    returnValue += line + "\n";
+  }
+  return returnValue;
+}
