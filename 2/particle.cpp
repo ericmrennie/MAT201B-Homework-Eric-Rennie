@@ -25,6 +25,7 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 
 // Declares three GUI-controllable parameters with {name, group, default, min, max}. These show up as sliders at runtime.
 struct AlloApp : App {
+  Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
   Parameter coulombs{"/coulombs", "", 0.0, 0.0, 0.2};
   Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
   Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
@@ -48,6 +49,7 @@ struct AlloApp : App {
     // set up GUI
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
     auto &gui = GUIdomain->newGUI();
+    gui.add(loveAttraction);
     gui.add(coulombs);
     gui.add(springForce);
     gui.add(pointSize);  // add parameter to GUI
@@ -94,16 +96,20 @@ struct AlloApp : App {
       velocity.push_back(randomVec3f(0.1)); // small random initial velocity
       force.push_back(randomVec3f(1)); // random initial force kick
 
-      // populating love vector
-      int crush = rnd::uniform(mesh.vertices().size());
-      if (crush == count) continue;
-      love.push_back(crush);
-
       // increment count
       count++;
     }
 
     nav().pos(0, 0, 10); // place camera 10 units back
+
+    // populating love vector
+    int count2 = 0;
+    while (count2 < mesh.vertices().size()) {
+      int crush = rnd::uniform(mesh.vertices().size());
+      if (crush == count2) continue;
+      love.push_back(crush);
+      count2++;
+    }
   }
 
   // spacebar toggles this - pauses the whole simulation
@@ -163,7 +169,9 @@ struct AlloApp : App {
     for (int i = 0; i < mesh.vertices().size(); i++) {
       auto& me = mesh.vertices()[i];
       auto& crush = love[i];
-      
+      float k = loveAttraction;
+      Vec3f direction = (mesh.vertices()[crush] - me).normalize();
+      force[i] += direction * k;
     }
 
 
