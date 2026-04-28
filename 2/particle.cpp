@@ -26,7 +26,7 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 // Declares three GUI-controllable parameters with {name, group, default, min, max}. These show up as sliders at runtime.
 struct AlloApp : App {
   Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
-  Parameter coulombs{"/coulombs", "", 0.0, 0.0, 0.2};
+  Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
   Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
   Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
   Parameter timeStep{"/timeStep", "", 0.1, 0.01, 0.6};
@@ -138,10 +138,10 @@ struct AlloApp : App {
     for (int i = 0; i < velocity.size(); i++) {
       // calculate spring force between this particle and the origin
 
-      auto& me = mesh.vertices()[i];
+      auto me = mesh.vertices()[i];
       float k = springForce;
       float displacement = me.mag() - 5.0;
-      force[i] += me.normalize() * (-k * displacement);
+      force[i] += me * (-k * displacement) / me.mag();
     }
 
 
@@ -218,13 +218,22 @@ struct AlloApp : App {
 
   // clears the screen, activates the point shader, draws all particles
   void onDraw(Graphics &g) override {
-    g.clear(0.3); // dark grey background
+    g.clear(0.0); // dark grey background
     g.shader(pointShader);
     g.shader().uniform("pointSize", pointSize / 100); // pass slider value to shader
     g.blending(true);
     g.blendTrans(); // transparency blending
     g.depthTesting(true);
     g.draw(mesh);
+
+    // lines between the particles
+    g.color(1, 1, 0);
+    Mesh lines = mesh;
+    lines.primitive(Mesh::LINES);
+    for (int i = 0; i < mesh.vertices().size(); i++) {
+      lines.index(i, love[i]);
+    }
+    g.draw(lines);
   }
 };
 
