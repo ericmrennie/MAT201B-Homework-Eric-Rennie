@@ -138,7 +138,7 @@ struct AlloApp : App {
     for (int i = 0; i < velocity.size(); i++) {
       // calculate spring force between this particle and the origin
 
-      auto me = mesh.vertices()[i];
+      auto& me = mesh.vertices()[i];
       float k = springForce;
       float displacement = me.mag() - 5.0;
       force[i] += me * (-k * displacement) / me.mag();
@@ -158,10 +158,10 @@ struct AlloApp : App {
         // limit large forces... if the force is too large, ignore it
         float k = coulombs;
         float distance = (chargeTwo - chargeOne).mag();
-        if (distance < 0.01) continue;
         Vec3f direction = (chargeTwo - chargeOne).normalize();
-        force[i] += direction * (k / pow(distance, 2));
-        force[j] -= direction * (k / pow(distance, 2));
+        Vec3f f = direction * (k / pow(distance, 2));
+        force[i] -= f;
+        force[j] += f;
       }
     }
 
@@ -171,7 +171,7 @@ struct AlloApp : App {
       auto& crush = love[i];
       float k = loveAttraction;
       Vec3f direction = (mesh.vertices()[crush] - me).normalize();
-      force[i] += direction * k;
+      force[i] -= direction * k;
     }
 
 
