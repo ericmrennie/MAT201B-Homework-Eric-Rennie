@@ -26,6 +26,7 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 // Declares GUI-controllable parameters. These show up as sliders at runtime.
 struct AlloApp : App {
   Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
+  ParameterBool loveLines{"/loveLines", "", true};
   Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
   Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
   Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
@@ -51,6 +52,7 @@ struct AlloApp : App {
     auto &gui = GUIdomain->newGUI();
     // add parameters to GUI
     gui.add(loveAttraction);
+    gui.add(loveLines);
     gui.add(coulombs);
     gui.add(springForce);
     gui.add(pointSize); 
@@ -216,13 +218,15 @@ struct AlloApp : App {
     g.draw(mesh);
 
     // lines between the particles
-    g.color(1, 1, 0);
-    Mesh lines = mesh;
-    lines.primitive(Mesh::LINES);
-    for (int i = 0; i < mesh.vertices().size(); i++) {
-      lines.index(i, love[i]);
+    if (loveLines) {
+      g.color(1, 1, 0);
+      Mesh lines = mesh;
+      lines.primitive(Mesh::LINES);
+      for (int i = 0; i < mesh.vertices().size(); i++) {
+        lines.index(i, love[i]);
+      }
+      g.draw(lines);
     }
-    g.draw(lines);
   }
 };
 
