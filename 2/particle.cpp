@@ -23,7 +23,7 @@ Vec3f randomVec3f(float scale) {
 
 string slurp(string fileName);  // forward declaration - full definition is at the bottom. Reads an entire file into a string (used to load GLSL shaders)
 
-// Declares three GUI-controllable parameters with {name, group, default, min, max}. These show up as sliders at runtime.
+// Declares GUI-controllable parameters. These show up as sliders at runtime.
 struct AlloApp : App {
   Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
   Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
@@ -49,13 +49,14 @@ struct AlloApp : App {
     // set up GUI
     auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
     auto &gui = GUIdomain->newGUI();
+    // add parameters to GUI
     gui.add(loveAttraction);
     gui.add(coulombs);
     gui.add(springForce);
-    gui.add(pointSize);  // add parameter to GUI
-    gui.add(timeStep);   // add parameter to GUI
-    gui.add(dragFactor);   // add parameter to GUI
-    //
+    gui.add(pointSize); 
+    gui.add(timeStep);  
+    gui.add(dragFactor);   
+
   }
 
   // loads and compiles the three shader stages (vertex -> geometry -> fragment) from files
@@ -66,7 +67,6 @@ struct AlloApp : App {
                         slurp("../point-geometry.glsl"));
 
     // set initial conditions of the simulation
-    //
 
     // c++11 "lambda" function
     // A lambda that returns a fully-saturated, full-brightness color with a random hue.
@@ -74,8 +74,6 @@ struct AlloApp : App {
 
     // spawns 500 particles with randomized positions, colors, masses, velocities, and initial forces
     mesh.primitive(Mesh::POINTS);
-    // does 1000 work on your system? how many can you make before you get a low
-    // frame rate? do you need to use <1000?
     int count = 0;
     while (count < 500) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
@@ -100,7 +98,7 @@ struct AlloApp : App {
       count++;
     }
 
-    nav().pos(0, 0, 10); // place camera 10 units back
+    nav().pos(0, 0, 30); // place camera 30 units back
 
     // populating love vector
     int count2 = 0;
@@ -132,9 +130,7 @@ struct AlloApp : App {
     // • .dot(Vec3f f) 
     // • .cross(Vec3f f)
 
-    // this loop is a STUB. It accesses each particle's position and computes its distance 
-    // from the origin, but doesn't do anything with that value yet. 
-    // THIS IS WHERE YOU'D ADD SPRING-TOWARD-ORIGIN-FORCES
+    // Hook's Law
     for (int i = 0; i < velocity.size(); i++) {
       // calculate spring force between this particle and the origin
 
@@ -145,11 +141,7 @@ struct AlloApp : App {
     }
 
 
-    // ANOTHER STUB - nested loop visits every unique particle pair exactly once 
-    // (note j = i + 1 avoids duplicates)
-    // THIS IS WHERE YOU'D ADD PAIRWISE REPULSION FORCES
-    // Calculate repulsive forces....
-    //
+    // Coulomb's law - add pairwise repulsion forces
     for (int i = 0; i < mesh.vertices().size(); ++i) {
       auto& chargeOne = mesh.vertices()[i];
       for (int j = i + 1; j < mesh.vertices().size(); ++j) {
@@ -173,9 +165,6 @@ struct AlloApp : App {
       Vec3f direction = (mesh.vertices()[crush] - me).normalize();
       force[i] -= direction * k;
     }
-
-
-///////// you probably do not need to edit the rest of this method...
 
     // viscous drag
     // drag is a force opposing the current velocity, proportional to speed
@@ -218,7 +207,7 @@ struct AlloApp : App {
 
   // clears the screen, activates the point shader, draws all particles
   void onDraw(Graphics &g) override {
-    g.clear(0.0); // dark grey background
+    g.clear(0.0); // black background
     g.shader(pointShader);
     g.shader().uniform("pointSize", pointSize / 100); // pass slider value to shader
     g.blending(true);
