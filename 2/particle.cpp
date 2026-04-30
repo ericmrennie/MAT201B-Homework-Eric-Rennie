@@ -26,7 +26,7 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 // Declares GUI-controllable parameters. These show up as sliders at runtime.
 struct AlloApp : App {
   Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
-  ParameterBool loveLines{"/loveLines", "", true};
+  ParameterBool loveLines{"/loveLines", "", false};
   Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
   Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
   Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
@@ -165,7 +165,7 @@ struct AlloApp : App {
       auto& crush = love[i];
       float k = loveAttraction;
       Vec3f direction = (mesh.vertices()[crush] - me).normalize();
-      force[i] -= direction * k;
+      force[i] += direction * k;
     }
 
     // viscous drag
