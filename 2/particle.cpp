@@ -2,11 +2,13 @@
 // 2022-01-20
 
 #include "al/app/al_App.hpp"
+#include "al/app/al_DistributedApp.hpp"
 #include "al/app/al_GUIDomain.hpp"
 #include "al/math/al_Random.hpp"
 
 using namespace al;
 
+#include <algorithm>
 #include <fstream> // opens and reads GLSL shader files
 #include <vector> // resizable array type
 #include <cmath> // math
@@ -23,8 +25,17 @@ Vec3f randomVec3f(float scale) {
 
 string slurp(string fileName);  // forward declaration - full definition is at the bottom. Reads an entire file into a string (used to load GLSL shaders)
 
+const int N = 500;
+
+struct WorldState {
+  double time;
+  int frame;
+  Pose camera;
+  Vec3f position[N];
+};
+
 // Declares GUI-controllable parameters. These show up as sliders at runtime.
-struct AlloApp : App {
+struct AlloApp : DistributedAppWithState<WorldState> {
   Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
   ParameterBool loveLines{"/loveLines", "", false};
   Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
@@ -47,18 +58,19 @@ struct AlloApp : App {
 
   // runs before window opens. Sets up the GUI panel and registers the three sliders
   void onInit() override {
-    // set up GUI
-    auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
-    auto &gui = GUIdomain->newGUI();
-    // add parameters to GUI
-    gui.add(loveAttraction);
-    gui.add(loveLines);
-    gui.add(coulombs);
-    gui.add(springForce);
-    gui.add(pointSize); 
-    gui.add(timeStep);  
-    gui.add(dragFactor);   
-
+    if (isPrimary()) {
+      // set up GUI
+      auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
+      auto &gui = GUIdomain->newGUI();
+      // add parameters to GUI
+      gui.add(loveAttraction);
+      gui.add(loveLines);
+      gui.add(coulombs);
+      gui.add(springForce);
+      gui.add(pointSize); 
+      gui.add(timeStep);  
+      gui.add(dragFactor);   
+    }
   }
 
   // loads and compiles the three shader stages (vertex -> geometry -> fragment) from files
@@ -77,7 +89,7 @@ struct AlloApp : App {
     // spawns 500 particles with randomized positions, colors, masses, velocities, and initial forces
     mesh.primitive(Mesh::POINTS);
     int count = 0;
-    while (count < 500) {
+    while (count < N) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
       if (v.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
 
@@ -116,6 +128,13 @@ struct AlloApp : App {
   bool freeze = false;
   // the simulation loop
   void onAnimate(double dt) override {
+    if (!isPrimary()) {
+      return;
+    }
+
+    state().frame++;
+    state().time += dt;
+
     if (freeze) return;
 
     // 
@@ -177,7 +196,7 @@ struct AlloApp : App {
 
     // Numerical Integration
     //
-    vector<Vec3f> &position(mesh.vertices());
+    vector<Vec3f>& position(mesh.vertices());
     for (int i = 0; i < velocity.size(); i++) {
       // "semi-implicit" Euler integration
       // updates velocity first using the new force, then updates position using the new velocity. More stable than plain Euler.
@@ -187,10 +206,15 @@ struct AlloApp : App {
 
     // clear all accelerations (IMPORTANT!!)
     // otherwise forces accumulate across frames
-    for (auto &a : force) a.set(0);
-  }
+    for (auto& a : force) a.set(0);
 
-  bool onKeyDown(const Keyboard &k) override {
+    for (int i = 0; i < N; i++) {
+      state().position[i] = mesh.vertices()[i];
+    }
+    state().camera = nav();
+  };
+
+  bool onKeyDown(const Keyboard& k) override {
     // pauses/unpauses simulation
     if (k.key() == ' ') {
       freeze = !freeze;
@@ -208,13 +232,23 @@ struct AlloApp : App {
   }
 
   // clears the screen, activates the point shader, draws all particles
-  void onDraw(Graphics &g) override {
+  void onDraw(Graphics& g) override {
+    if(!isPrimary()) {
+      nav().set(state().camera);
+    }
+
     g.clear(0.0); // black background
     g.shader(pointShader);
     g.shader().uniform("pointSize", pointSize / 100); // pass slider value to shader
     g.blending(true);
     g.blendTrans(); // transparency blending
     g.depthTesting(true);
+
+    if(!isPrimary()) {
+      for (int i = 0; i < N; i++) {
+        mesh.vertices()[i] = state().position[i];
+      }
+    }
     g.draw(mesh);
 
     // lines between the particles
