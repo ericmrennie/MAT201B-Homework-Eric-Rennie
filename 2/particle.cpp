@@ -265,7 +265,7 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 };
 
 int main() {
-  AlloApp app;
+  App app;
   app.configureAudio(48000, 512, 2, 0);
   app.start();
 }
