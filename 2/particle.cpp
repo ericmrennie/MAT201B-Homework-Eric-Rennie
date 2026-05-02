@@ -1,10 +1,11 @@
 // code adapted from Karl Yerkes
 // 2022-01-20
 
-#include "al/app/al_App.hpp"
 #include "al/app/al_DistributedApp.hpp"
 #include "al/app/al_GUIDomain.hpp"
 #include "al/math/al_Random.hpp"
+#include "al_ext/statedistribution/al_CuttleboneDomain.hpp"
+#include "al_ext/statedistribution/al_CuttleboneStateSimulationDomain.hpp"
 
 using namespace al;
 
@@ -58,6 +59,12 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 
   // runs before window opens. Sets up the GUI panel and registers the three sliders
   void onInit() override {
+    auto cuttleboneDomain = CuttleboneStateSimulationDomain<WorldState>::enableCuttlebone(this);
+    if (!cuttleboneDomain) {
+      std::cerr << "ERROR: Could not start Cuttlebone. Quitting." << std::endl;
+      quit();
+    }
+    
     if (isPrimary()) {
       // set up GUI
       auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
@@ -265,9 +272,9 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 };
 
 int main() {
-  App app;
-  app.configureAudio(48000, 512, 2, 0);
-  app.start();
+  AlloApp ericApp;
+  ericApp.configureAudio(48000, 512, 2, 0);
+  ericApp.start();
 }
 
 // Reads a file line by line and concatenates everything into one string. Used to feed the GLSL shader source code to the compiler.
