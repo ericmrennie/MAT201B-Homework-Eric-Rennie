@@ -18,11 +18,39 @@ using namespace al;
 using namespace std;
 
 // Matrices
-Mat4f matrix1 (
-  -0.35029977, -0.16774433, -0.83913914,  0.36604501,
-  0.74251186, -0.05451286, -0.491005,   -0.44001148,
-  0.28858743,  0.82218219, -0.07857842,  0.47281148,
-  0.48132633, -0.53094082,  0.19384673,  0.66169613
+Mat4f matrix345 (
+  -0.39297645, -0.19006539, -0.79904449,  0.38275456,
+  0.70360333,  0.0151363,  -0.55097654, -0.42031725,
+  0.24671911,  0.79894134, -0.06128217,  0.52210669,
+  0.51494664, -0.54851368,  0.17241155,  0.61625113
+);
+
+Mat4f matrix133 (
+  -0.62548462, -0.00276655, -0.60210054,  0.48590037,
+  0.52241925, -0.29601617, -0.74998494, -0.25853052,
+  -0.30724325,  0.62371315, -0.22778432, -0.67421116,
+  0.48094864,  0.71638787, -0.11390664,  0.48204253
+);
+
+Mat4f matrix183 (
+  -0.8229469, -0.4736292,  -0.24244344, -0.17185128,
+  0.51967637, -0.77892607, -0.31859541,  0.10763629,
+  -0.04655574,  0.3653016,  -0.83560482,  0.39500613,
+  -0.20101081, -0.15931808,  0.36243714,  0.89035369
+);
+
+Mat4f matrix337 (
+  -0.87300695, -0.20841005, -0.40092313,  0.12980276,
+  0.35530637, -0.87154869, -0.27005816,  0.15618207,
+  0.28966717,  0.42067163, -0.68779197,  0.49923392,
+  -0.1042745,  -0.05628051,  0.52577127,  0.83227873
+);
+
+Mat4f matrix19 (
+  -0.2820705,  -0.43542687, -0.4535665,  -0.69679057,
+  0.67036022, -0.5532802,   0.40975586, -0.19234948,
+  0.60508977,  0.56872085, -0.38589956, -0.34914824,
+  0.25557734, -0.3758205,  -0.66170922,  0.56212106
 );
 
 // creates a random 3D vector where each component is in [-1, 1], then scales it.
@@ -36,6 +64,20 @@ string slurp(string fileName);  // forward declaration - full definition is at t
 
 const int N = 500;
 
+// Claude Sonnet 4.6 - "how would I animate between two matrices"
+Mat4f lerpMatrix(Mat4f A, Mat4f B, float t) {
+  float t2 = (1.0f - cos(t * M_PI)) / 2.0f; // cosine curve - start slow, speed up in the middle, slow down again at the end
+  // Loops through all 16 numbers of the matrix and blends each one individually between matrix A and B
+  // when t2=0 you get pure a
+  // when t2=1 you get pure b
+  // in between you get a mix
+  Mat4f result;
+  for (int i = 0; i < 16; i++) {
+    result[i] = A[i] * (1.0f - t2) + B[i] * t2;
+  }
+  return result;
+}
+
 struct WorldState {
   double time;
   int frame;
@@ -45,25 +87,13 @@ struct WorldState {
 
 // Declares GUI-controllable parameters. These show up as sliders at runtime.
 struct AlloApp : DistributedAppWithState<WorldState> {
-  // Parameter loveAttraction{"/loveAttraction", "", 0.0, 0.0, 3.0};
-  // ParameterBool loveLines{"/loveLines", "", false};
-  // Parameter coulombs{"/coulombs", "", 0.0, -0.1, 0.1};
-  // Parameter springForce{"/springForce", "", 0.5, 0.1, 2.0};
-  // Parameter pointSize{"/pointSize", "", 2.0, 1.0, 10.0};
-  // Parameter timeStep{"/timeStep", "", 0.1, 0.01, 0.6};
-  // Parameter dragFactor{"/dragFactor", "", 0.1, 0.0, 0.9};
 
   // state variables
   ShaderProgram pointShader; // the GLSL program that draws particles
 
   //  simulation state
   Mesh mesh;  // position *is inside the mesh* mesh.vertices() are the positions. stores positions and colors
-
-  // parallel arrays - one entry per particle
-  // vector<Vec3f> velocity;
-  // vector<Vec3f> force;
-  // vector<float> mass;
-  // vector<int> love;
+  vector<Vec3f> originalPositions; // stores starting position of each particle
 
   // runs before window opens. Sets up the GUI panel and registers the three sliders
   void onInit() override {
@@ -74,17 +104,7 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     }
     
     if (isPrimary()) {
-      // set up GUI
-      // auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
-      // auto &gui = GUIdomain->newGUI();
-      // // add parameters to GUI
-      // gui.add(loveAttraction);
-      // gui.add(loveLines);
-      // gui.add(coulombs);
-      // gui.add(springForce);
-      // gui.add(pointSize); 
-      // gui.add(timeStep);  
-      // gui.add(dragFactor);   
+
     }
   }
 
@@ -108,27 +128,17 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     int count = 0;
     while (count < N) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
-      Vec4f transformed = matrix1 * Vec4f(v, 1.0);
+      Vec4f transformed = matrix337 * Vec4f(v, 1.0);
       //if (transformed.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
-      mesh.vertex(transformed.x, transformed.y, transformed.z); // might need to pass a fourth point
-      mesh.color(randomColor()); // random hue
+      mesh.vertex(transformed.x, transformed.y, transformed.z); 
+      mesh.color(255, 255, 255); // random hue
+      mesh.texCoord(1.0, 0);
+      originalPositions.push_back(v);
       
       std::cout << transformed.x << " "
           << transformed.y << " "
           << transformed.z << " "
           << transformed.w << std::endl;
-
-      // float m = rnd::uniform(3.0, 0.5);
-      // float m = 3 + rnd::normal() / 2; // mass: normally distributed around 3
-      // if (m < 0.5) m = 0.5; // clamp minimum mass
-      // mass.push_back(m);
-
-      // using a simplified volume/size relationship
-      // mesh.texCoord(pow(m, 1.0f / 3), 0);  // s, t // encode size as cube root of mass (volume -> radius)
-
-      // separate state arrays
-      // velocity.push_back(randomVec3f(0.1)); // small random initial velocity
-      // force.push_back(randomVec3f(1)); // random initial force kick
 
       // increment count
       count++;
@@ -136,15 +146,6 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     //***** YOU ARE HERE ******
 
     nav().pos(0, 0, 30); // place camera 30 units back
-
-    // populating love vector
-    // int count2 = 0;
-    // while (count2 < mesh.vertices().size()) {
-    //   int crush = rnd::uniform(mesh.vertices().size());
-    //   if (crush == count2) continue;
-    //   love.push_back(crush);
-    //   count2++;
-    // }
   }
 
   // spacebar toggles this - pauses the whole simulation
@@ -160,80 +161,36 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 
     if (freeze) return;
 
-    // 
-    //
-    // Vec3f has lots of operations you might use...
-    // • +=
-    // • -=
-    // • +
-    // • -
-    // • .normalize() ~ Vec3f points in the direction as it did, but has length 1
-    // • .normalize(float scale) ~ same but length `scale`
-    // • .mag() ~ length of the Vec3f
-    // • .magSqr() ~ squared length of the Vec3f
-    // • .dot(Vec3f f) 
-    // • .cross(Vec3f f)
+    // ── Add or remove matrices from this array ──
+    Mat4f matrices[] = { matrix345, matrix133, matrix183, matrix337, matrix19 };
+    int numMatrices = 5;  // update this when you add more
 
-    // Hook's Law
-    // for (int i = 0; i < velocity.size(); i++) {
-    //   // calculate spring force between this particle and the origin
+    float duration = 5.0f;  // seconds per transition
+    float totalDuration = duration * numMatrices;
+    // fmod is modulo for floats
+    // wraps state().time into a repeating window of duration times number of matrices 
+    float t = fmod(state().time, totalDuration);
 
-    //   auto& me = mesh.vertices()[i];
-    //   float k = springForce;
-    //   float displacement = me.mag() - 5.0;
-    //   force[i] += me * (-k * displacement) / me.mag();
-    // }
+    // figure out which two matrices we're between
+    int idx = (int)(t / duration);
+    float localT = (t - idx * duration) / duration;
 
+    // ping pong logic
+    Mat4f current = lerpMatrix(matrices[idx], matrices[(idx + 1) % numMatrices], localT);
 
-    // Coulomb's law - add pairwise repulsion forces
-    // for (int i = 0; i < mesh.vertices().size(); ++i) {
-    //   auto& chargeOne = mesh.vertices()[i];
-    //   for (int j = i + 1; j < mesh.vertices().size(); ++j) {
-    //     auto& chargeTwo = mesh.vertices()[j];
-    //     // i and j are a pair
-    //     // limit large forces... if the force is too large, ignore it
-    //     float k = coulombs;
-    //     float distance = (chargeTwo - chargeOne).mag();
-    //     Vec3f direction = (chargeTwo - chargeOne).normalize();
-    //     Vec3f f = direction * (k / pow(distance, 2));
-    //     force[i] -= f;
-    //     force[j] += f;
-    //   }
-    // }
-
-    // love attraction logic
-    // for (int i = 0; i < mesh.vertices().size(); i++) {
-    //   auto& me = mesh.vertices()[i];
-    //   auto& crush = love[i];
-    //   float k = loveAttraction;
-    //   Vec3f direction = (mesh.vertices()[crush] - me).normalize();
-    //   force[i] += direction * k;
-    // }
-
-    // viscous drag
-    // drag is a force opposing the current velocity, proportional to speed
-    // slows particles down over time
-    // for (int i = 0; i < velocity.size(); i++) {
-    //   force[i] += - velocity[i] * dragFactor; // viscous drag: F = -bv
-    // }
-
-    // Numerical Integration
-    //
-    vector<Vec3f>& position(mesh.vertices());
-    // for (int i = 0; i < velocity.size(); i++) {
-    //   // "semi-implicit" Euler integration
-    //   // updates velocity first using the new force, then updates position using the new velocity. More stable than plain Euler.
-    //   velocity[i] += force[i] / mass[i] * timeStep;
-    //   position[i] += velocity[i] * timeStep;
-    // }
-
-    // clear all accelerations (IMPORTANT!!)
-    // otherwise forces accumulate across frames
-    // for (auto& a : force) a.set(0);
-
+    // loop through all particles, grab each one's original starting position
+    // this is transforming from scratch each frame rather than building on the previous frame's result
+    // ** might want to change this to feed into the next matrix **
     for (int i = 0; i < N; i++) {
+      Vec3f v = originalPositions[i];
+      // apply the blended matrix to the original position
+      // promotes the 3d position to 4d by adding a 1.0 as the fourth component
+      Vec4f transformed = current * Vec4f(v, 1.0);
+      // extract only the x,y,z from the 4d result and store it back into the mesh so it gets drawn in the new posiiton
+      mesh.vertices()[i] = Vec3f(transformed.x, transformed.y, transformed.z);
       state().position[i] = mesh.vertices()[i];
     }
+    // syncs the camera position to the world state so all screens share the same viewpoint
     state().camera = nav();
   };
 
@@ -242,14 +199,6 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     if (k.key() == ' ') {
       freeze = !freeze;
     }
-
-    // if (k.key() == '1') {
-    //   // introduce some "random" forces - useful for testing
-    //   for (int i = 0; i < velocity.size(); i++) {
-    //     // F = ma
-    //     force[i] += randomVec3f(1);
-    //   }
-    // }
 
     return true;
   }
@@ -262,7 +211,7 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 
     g.clear(0.0); // black background
     g.shader(pointShader);
-    // g.shader().uniform("pointSize", pointSize / 100); // pass slider value to shader
+    g.shader().uniform("pointSize", 0.1); // pass slider value to shader
     g.blending(true);
     g.blendTrans(); // transparency blending
     g.depthTesting(true);
@@ -273,17 +222,6 @@ struct AlloApp : DistributedAppWithState<WorldState> {
       }
     }
     g.draw(mesh);
-
-    // lines between the particles
-    // if (loveLines) {
-    //   g.color(1, 1, 0);
-    //   Mesh lines = mesh;
-    //   lines.primitive(Mesh::LINES);
-    //   for (int i = 0; i < mesh.vertices().size(); i++) {
-    //     lines.index(i, love[i]);
-    //   }
-    //   g.draw(lines);
-    // }
   }
 };
 
