@@ -93,7 +93,7 @@ struct AlloApp : DistributedAppWithState<WorldState> {
 
   //  simulation state
   Mesh mesh;  // position *is inside the mesh* mesh.vertices() are the positions. stores positions and colors
-  vector<Vec3f> originalPositions; // stores starting position of each particle
+  vector<Vec3f> currentPositions; // stores starting position of each particle
 
   // runs before window opens. Sets up the GUI panel and registers the three sliders
   void onInit() override {
@@ -128,12 +128,12 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     int count = 0;
     while (count < N) {
       Vec3f v = randomVec3f(5); // random position in [-5, 5]^3
-      Vec4f transformed = matrix337 * Vec4f(v, 1.0);
+      Vec4f transformed = Vec4f(v, 1.0);
       //if (transformed.mag() > 5.0) continue; // if the distance is greater than 5.0, skip the rest of the loop iteration and go back to the top
       mesh.vertex(transformed.x, transformed.y, transformed.z); 
-      mesh.color(255, 255, 255); // random hue
+      mesh.color(255, 255, 255); // white color
       mesh.texCoord(1.0, 0);
-      originalPositions.push_back(v);
+      currentPositions.push_back(v);
       
       std::cout << transformed.x << " "
           << transformed.y << " "
@@ -145,11 +145,12 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     }
     //***** YOU ARE HERE ******
 
-    nav().pos(0, 0, 30); // place camera 30 units back
+    nav().pos(0, 0, 10); // place camera 30 units back
   }
 
   // spacebar toggles this - pauses the whole simulation
   bool freeze = false;
+
   // the simulation loop
   void onAnimate(double dt) override {
     if (!isPrimary()) {
@@ -175,20 +176,23 @@ struct AlloApp : DistributedAppWithState<WorldState> {
     int idx = (int)(t / duration);
     float localT = (t - idx * duration) / duration;
 
-    // ping pong logic
+    // cycling through matrices
     Mat4f current = lerpMatrix(matrices[idx], matrices[(idx + 1) % numMatrices], localT);
 
     // loop through all particles, grab each one's original starting position
     // this is transforming from scratch each frame rather than building on the previous frame's result
     // ** might want to change this to feed into the next matrix **
     for (int i = 0; i < N; i++) {
-      Vec3f v = originalPositions[i];
+      // ** left off here ** - right now it collapses on itself
+      Vec3f v = currentPositions[i];
       // apply the blended matrix to the original position
       // promotes the 3d position to 4d by adding a 1.0 as the fourth component
       Vec4f transformed = current * Vec4f(v, 1.0);
       // extract only the x,y,z from the 4d result and store it back into the mesh so it gets drawn in the new posiiton
-      mesh.vertices()[i] = Vec3f(transformed.x, transformed.y, transformed.z);
-      state().position[i] = mesh.vertices()[i];
+      Vec3f newPos = Vec3f(transformed.x, transformed.y, transformed.z);
+      mesh.vertices()[i] = newPos;
+      state().position[i] = newPos;
+      currentPositions[i] = newPos;
     }
     // syncs the camera position to the world state so all screens share the same viewpoint
     state().camera = nav();
