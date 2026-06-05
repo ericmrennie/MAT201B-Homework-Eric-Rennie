@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <array>
 
 #include "al/app/al_App.hpp"
 #include "al/app/al_GUIDomain.hpp"
