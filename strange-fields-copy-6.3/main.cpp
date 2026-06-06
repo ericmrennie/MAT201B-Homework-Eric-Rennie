@@ -29,13 +29,10 @@
 #include <vector>
 
 #include "Gamma/scl.h"
-#include "al/app/al_App.hpp"
 #include "al/app/al_DistributedApp.hpp"
 #include "al/app/al_GUIDomain.hpp"
-#include "al/io/al_Window.hpp"
 #include "al/math/al_Mat.hpp"
 #include "al/math/al_Random.hpp"
-#include "al/ui/al_Parameter.hpp"
 
 std::string slurp(std::string fileName) {
   std::fstream file(fileName);
@@ -114,46 +111,6 @@ double wraptureFromArray(std::vector<Vec4d> &v, double b,
 // matSliders[row][col] maps to mElems[col*5 + row].
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sequencer
-// ─────────────────────────────────────────────────────────────────────────────
-
-enum class SeqEventType { Zoo, SetB, SetR, SetCount, SetSpeed, Wait, Loop };
-
-struct SeqEvent {
-  SeqEventType type;
-  int   iVal  = 0;
-  float fVal  = 0.f;
-  float hold  = 0.f;   // seconds to wait after firing
-  float speed = 0.f;   // only for Zoo events
-};
-
-std::vector<SeqEvent> loadSequence(const std::string &path) {
-  std::vector<SeqEvent> events;
-  std::ifstream f(path);
-  if (!f.is_open()) { printf("[seq] Cannot open '%s'\n", path.c_str()); return events; }
-  std::string line;
-  while (std::getline(f, line)) {
-    auto pos = line.find('#');
-    if (pos != std::string::npos) line = line.substr(0, pos);
-    if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
-    std::istringstream ss(line);
-    std::string cmd;  ss >> cmd;
-    SeqEvent ev;
-    if      (cmd == "zoo")   { ev.type = SeqEventType::Zoo;      ss >> ev.iVal >> ev.speed >> ev.hold; }
-    else if (cmd == "b")     { ev.type = SeqEventType::SetB;     ss >> ev.fVal >> ev.hold; }
-    else if (cmd == "r")     { ev.type = SeqEventType::SetR;     ss >> ev.fVal >> ev.hold; }
-    else if (cmd == "count") { ev.type = SeqEventType::SetCount; ss >> ev.fVal >> ev.hold; }
-    else if (cmd == "speed") { ev.type = SeqEventType::SetSpeed; ss >> ev.fVal; }
-    else if (cmd == "wait")  { ev.type = SeqEventType::Wait;     ss >> ev.hold; }
-    else if (cmd == "loop")  { ev.type = SeqEventType::Loop; }
-    else { printf("[seq] Unknown command: '%s'\n", cmd.c_str()); continue; }
-    events.push_back(ev);
-  }
-  printf("[seq] Loaded %zu events from '%s'\n", events.size(), path.c_str());
-  return events;
-}
-
 struct AlloApp : DistributedApp {
   // ── Zoo of interesting seeds ──────────────────────────────────────────────
   std::vector<int> zoo = {
@@ -219,88 +176,6 @@ struct AlloApp : DistributedApp {
   double blendSpeed = 0.02;
   bool dragged = false;
   double angle = 0;
-
-  // ── Sequencer state ───────────────────────────────────────────────────────
-  std::vector<SeqEvent> seqEvents;
-  int    seqIndex   = -1;
-  double seqTimer   = 0.0;
-  bool   seqRunning = false;
-
-  // ── Sequencer GUI parameters ──────────────────────────────────────────────
-  // Trigger renders as a momentary button in the GUIDomain panel.
-  Trigger seqPlayTrigger{"[Seq] Play"};
-  Trigger seqStopTrigger{"[Seq] Stop"};
-  // seqProgress: read-only 0–1 bar showing how far through the current hold.
-  Parameter seqProgress{"[Seq] Hold", "", 0.f, 0.f, 1.f};
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Sequencer methods
-  // ─────────────────────────────────────────────────────────────────────────
-
-  void seqPlay(const std::string &path = "presets/demo.seq") {
-    seqEvents  = loadSequence(path);
-    seqIndex   = -1;
-    seqTimer   = 0.0;
-    seqRunning = !seqEvents.empty();
-    seqProgress.set(0.f);
-    if (seqRunning) seqAdvance();
-  }
-
-  void seqStop() {
-    seqRunning = false;
-    seqIndex   = -1;
-    seqProgress.set(0.f);
-    printf("[seq] Stopped.\n");
-  }
-
-  void seqAdvance() {
-    if (seqEvents.empty()) { seqRunning = false; return; }
-    seqIndex = (seqIndex + 1) % (int)seqEvents.size();
-    const SeqEvent &ev = seqEvents[seqIndex];
-
-    switch (ev.type) {
-      case SeqEventType::Zoo: {
-        int idx = std::max(0, std::min(ev.iVal, (int)zoo.size() - 1));
-        if (ev.speed > 0.f) blendSpeed = (double)ev.speed;
-        matEditMode = false;
-        zooIndex.set(idx);
-        seed.set(zoo[idx]);
-        Mat5d m;  m.coefficients(seed.get());
-        targetMat = m.toArray();
-        targetToTargetSliders();
-        blendActive.set(false);
-        blendT = 0.0;
-        blendActive.set(true);
-        printf("[seq] zoo[%d] seed:%d speed:%.4f hold:%.2fs\n", idx, zoo[idx], blendSpeed, ev.hold);
-        seqTimer = ev.hold;
-        break;
-      }
-      case SeqEventType::SetB:
-        b.set(ev.fVal);
-        printf("[seq] b=%.4f hold:%.2fs\n", ev.fVal, ev.hold);
-        seqTimer = ev.hold;  break;
-      case SeqEventType::SetR:
-        r.set(ev.fVal);
-        printf("[seq] r=%.4f hold:%.2fs\n", ev.fVal, ev.hold);
-        seqTimer = ev.hold;  break;
-      case SeqEventType::SetCount:
-        count.set(ev.fVal);
-        printf("[seq] count=%.0f hold:%.2fs\n", ev.fVal, ev.hold);
-        seqTimer = ev.hold;  break;
-      case SeqEventType::SetSpeed:
-        blendSpeed = (double)ev.fVal;
-        printf("[seq] speed=%.4f\n", blendSpeed);
-        seqTimer = 0.0;  break;
-      case SeqEventType::Wait:
-        printf("[seq] wait %.2fs\n", ev.hold);
-        seqTimer = ev.hold;  break;
-      case SeqEventType::Loop:
-        printf("[seq] loop\n");
-        seqIndex = -1;
-        seqTimer = 0.0;  break;
-    }
-    seqProgress.set(0.f);
-  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Slider <-> array helpers
@@ -414,18 +289,6 @@ struct AlloApp : DistributedApp {
       gui.add(b);
       gui.add(r);
       gui.add(count);
-
-      // ── Sequencer controls ─────────────────────────────────────────────
-      gui.add(seqPlayTrigger);
-      gui.add(seqStopTrigger);
-      gui.add(seqProgress);
-
-      seqPlayTrigger.registerChangeCallback([this](float) {
-        seqPlay("presets/demo.seq");
-      });
-      seqStopTrigger.registerChangeCallback([this](float) {
-        seqStop();
-      });
 
       for (int row = 0; row < 4; row++)
         for (int col = 0; col < 5; col++) {
@@ -623,12 +486,6 @@ struct AlloApp : DistributedApp {
 
     } else if (k.key() == 's' || k.key() == 'S') {
       saveMatrixToFile();
-
-    } else if (k.key() == Keyboard::TAB) {
-      seqPlay("presets/demo.seq");   // Tab: load & play
-
-    } else if (k.key() == Keyboard::ESCAPE) {
-      seqStop();                     // Esc: stop
     }
 
     return true;
@@ -682,22 +539,6 @@ struct AlloApp : DistributedApp {
     } else {
       nav().set(camera);
     }
-
-    // ── Sequencer tick (primary only) ─────────────────────────────────────
-    if (isPrimary() && seqRunning) {
-      seqTimer -= dt;
-
-      // Update the progress bar: fraction consumed of the current hold.
-      if (seqIndex >= 0 && seqIndex < (int)seqEvents.size()) {
-        float hold = seqEvents[seqIndex].hold;
-        float prog = (hold > 0.f)
-                     ? 1.f - (float)(seqTimer / (double)hold)
-                     : 1.f;
-        seqProgress.set(std::max(0.f, std::min(1.f, prog)));
-      }
-
-      if (seqTimer <= 0.0) seqAdvance();
-    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -715,43 +556,4 @@ struct AlloApp : DistributedApp {
   }
 };
 
-int main() {
-  system("mkdir -p presets");
-
-  // Write demo sequence — edit presets/demo.seq at any time,
-  // then press Tab (or click [Seq] Play) to reload and play it.
-  std::string demoSeq = R"(# wrapture demo sequence
-# zoo  <index> <blendSpeed> <holdSec>
-# b    <value> <holdSec>
-# r    <value> <holdSec>
-# count <value> <holdSec>
-# speed <value>
-# wait  <seconds>
-# loop
-
-zoo  1  0.03  6.0
-speed 0.01
-zoo  2  0.01  8.0
-count 80000  0.0
-wait  1.0
-zoo  8  0.02  6.0
-b    2.5  0.0
-wait  1.0
-zoo  9  0.015  8.0
-b    1.0  0.0
-count 10000  0.0
-wait  2.0
-loop
-)";
-
-  {
-    std::ofstream ofs("presets/demo.seq");
-    if (ofs.is_open()) {
-      ofs << demoSeq;
-      printf("[seq] Wrote presets/demo.seq — Tab=play, Esc=stop.\n");
-    }
-  }
-
-  AlloApp().start();
-  return 0;
-}
+int main() { AlloApp().start(); }
