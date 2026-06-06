@@ -33,6 +33,11 @@
 #include "al/app/al_GUIDomain.hpp"
 #include "al/math/al_Mat.hpp"
 #include "al/math/al_Random.hpp"
+#include "al/ui/al_PresetHandler.hpp"
+#include "al/ui/al_PresetServer.hpp"
+#include "al/ui/al_SequenceServer.hpp"
+
+
 
 std::string slurp(std::string fileName) {
   std::fstream file(fileName);
@@ -112,6 +117,13 @@ double wraptureFromArray(std::vector<Vec4d> &v, double b,
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct AlloApp : DistributedApp {
+
+
+  PresetHandler presetHandler;
+  PresetSequencer presetSequencer;
+  //ky SequenceServer* sequenceServer{nullptr}; // {"127.0.0.1", 9012};
+
+
   // ── Zoo of interesting seeds ──────────────────────────────────────────────
   std::vector<int> zoo = {
       186,  // two flat planes to quad clusters  d:0.311102
@@ -284,8 +296,30 @@ struct AlloApp : DistributedApp {
   // ─────────────────────────────────────────────────────────────────────────
   void onInit() override {
     if (isPrimary()) {
+      //ky sequenceServer = new SequenceServer();
       auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
       auto &gui = GUIdomain->newGUI();
+
+      presetHandler << camera; 
+      presetHandler << b << r << count;
+      //presetHandler.setVerbose(true);
+      //presetHandler.setSubDirectory("");
+      presetHandler.setRootPath("./");
+      std::cout << "preset handler root path " << presetHandler.getRootPath() << std::endl;
+      std::cout << "preset handler getCurrentPath() " << presetHandler.getCurrentPath() << std::endl;
+
+      presetSequencer.registerPresetHandler(presetHandler);
+
+       presetHandler.setMorphTime(2.0); 
+
+      gui.add(presetHandler);
+
+      gui.add(presetSequencer);
+
+      //ky *sequenceServer << presetSequencer;
+      //ky sequenceServer->print();
+
+
       gui.add(b);
       gui.add(r);
       gui.add(count);
@@ -293,6 +327,7 @@ struct AlloApp : DistributedApp {
       for (int row = 0; row < 4; row++)
         for (int col = 0; col < 5; col++) {
           gui.add(matSliders[row][col]);
+          presetHandler <<matSliders[row][col];
           matSliders[row][col].registerChangeCallback([this](float) {
             if (!guiReady) return;
             matEditMode = true;
@@ -320,6 +355,10 @@ struct AlloApp : DistributedApp {
     // ── Secondary callbacks ────────────────────────────────────────────────
     // NOTE: these fire on BOTH nodes when OSC arrives; the isPrimary() guard
     // ensures only the secondary acts on remotely-received changes.
+
+    camera.registerChangeCallback([this](const Pose& p) {
+      nav().set(p);
+    });
 
     seed.registerChangeCallback([this](int32_t newSeed) {
       if (isPrimary()) return;
@@ -423,6 +462,11 @@ struct AlloApp : DistributedApp {
   // ─────────────────────────────────────────────────────────────────────────
   bool onKeyDown(const Keyboard &k) override {
     if (!isPrimary()) return true;
+
+        if (k.key() == '0') {
+      // Notice that you don't need to add the extension ".sequence" to the name
+      presetSequencer.playSequence("foo");
+    }
 
     if (k.key() == ' ') {
       // Next zoo entry — immediate snap (no blend)
@@ -535,7 +579,16 @@ struct AlloApp : DistributedApp {
 
     // ── Camera sync ───────────────────────────────────────────────────────
     if (isPrimary()) {
-      camera.set(nav());
+      if (presetSequencer.running()) {
+        // we are playing back camera animations (sequences)
+        // so drive the nav() with those poses
+        nav().set(camera);
+      }
+      else {
+        // we are driving around the nav() ourselves...
+        // save camera pose
+        camera.set(nav());
+      }
     } else {
       nav().set(camera);
     }
