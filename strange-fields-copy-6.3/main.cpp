@@ -151,6 +151,8 @@ struct AlloApp : DistributedApp {
   // blendActive: primary sets true to tell secondary "start blending".
   // Primary sets false when its own blend settles.
   ParameterBool blendActive{"blendActive", "", false};
+    // single-string target matrix to avoid partial updates over OSC
+    ParameterString targetMatParam{"targetMat", "network", ""};
 
   // ── Rotation parameters ───────────────────────────────────────────────────
   // rotSpeed: degrees per frame, controlled via GUI slider.
@@ -305,9 +307,14 @@ struct AlloApp : DistributedApp {
     matEditMode = false;
     int nextIdx = ((zooIndex.get() + delta) + (int)zoo.size()) % (int)zoo.size();
     zooIndex.set(nextIdx);
-    seed.set(zoo[nextIdx]);
 
     if (blend) {
+      // Snapshot currentMat into matSliders BEFORE changing seed so the
+      // secondary reads the correct FROM endpoint when blendActive fires.
+      matToSliders();
+
+      seed.set(zoo[nextIdx]);
+
       Mat5d m;
       m.coefficients(seed.get());
       targetMat = m.toArray();
@@ -317,6 +324,7 @@ struct AlloApp : DistributedApp {
       blendActive.set(true);
       printf("zoo [%d/%lu] seed:%d\n", nextIdx, zoo.size(), (int)seed.get());
     } else {
+      seed.set(zoo[nextIdx]);
       blendT = 0.0;
       rebuild();
       matToSliders();
@@ -397,6 +405,20 @@ struct AlloApp : DistributedApp {
     // ── Register everything with parameterServer ───────────────────────────
     parameterServer() << b << r << count << camera;
     parameterServer() << seed << zooIndex << matEditMode << blendActive;
+  parameterServer() << targetMatParam;
+      // publish the target matrix as a single string so secondaries get a
+      // complete endpoint before being triggered to blend.
+      {
+        std::ostringstream os;
+        for (int k = 0; k < 25; k++) {
+          if (k) os << ' ';
+          os << targetMat[k];
+        }
+        targetMatParam.set(os.str());
+      }
+      blendActive.set(false);  // reset edge so callback fires again
+      blendT = 0.0;
+      blendActive.set(true);
     parameterServer() << rotSpeed << rotAngle << rotX << rotY << rotZ << rotPaused;
 
     for (int row = 0; row < 4; row++)
@@ -415,7 +437,10 @@ struct AlloApp : DistributedApp {
 
     seed.registerChangeCallback([this](int32_t newSeed) {
       if (isPrimary()) return;
-      // Exact deterministic rebuild — no searching, no seed mutation.
+      // During a blend the seed changes to the target but we must NOT rebuild
+      // yet — the blendActive callback will set both endpoints and kick off the
+      // lerp. Only do an immediate rebuild when no blend is in flight.
+      if (blendActive.get()) return;
       rebuildFromSeed(newSeed);
       matToSliders();
     });
@@ -442,8 +467,14 @@ struct AlloApp : DistributedApp {
     blendActive.registerChangeCallback([this](float active) {
       if (isPrimary()) return;
       if (active > 0.5f) {
-        // targetMat comes from targetSliders (already synced via parameterServer)
-        targetMat = targetSlidersToArray();
+        // Parse the single-string target matrix previously sent by primary.
+        currentMat = slidersToArray();        // where we are blending FROM
+        std::array<double,25> parsed{};
+        std::istringstream is(targetMatParam.get());
+        for (int k = 0; k < 25; k++) {
+          is >> parsed[k];
+        }
+        targetMat = parsed;  // where we are blending TO
         blendT = 0.0;
       }
     });
@@ -461,6 +492,8 @@ struct AlloApp : DistributedApp {
     shader.compile(slurp("../vertex.glsl"), slurp("../fragment.glsl"),
                    slurp("../geometry.glsl"));
     Mat5d m;
+    // Make near clipping plane smaller so close objects are not clipped
+    lens().near(0.01);
     m.coefficients(zoo[0]);
     currentMat = m.toArray();
     targetMat = currentMat;
@@ -553,6 +586,10 @@ struct AlloApp : DistributedApp {
         if (isPrimary()) {
           // Tell secondaries the blend is done.
           blendActive.set(false);
+        } else {
+          // Rebuild cleanly from the final seed so the secondary's v matches
+          // exactly what the primary computed at blend end.
+          rebuildFromSeed(seed.get());
         }
       }
     }
