@@ -28,6 +28,8 @@
 #include <sstream>
 #include <vector>
 
+#include "Gamma/Noise.h"
+#include "Gamma/Oscillator.h"
 #include "Gamma/scl.h"
 #include "al/app/al_DistributedApp.hpp"
 #include "al/app/al_GUIDomain.hpp"
@@ -115,6 +117,48 @@ double wraptureFromArray(std::vector<Vec4d> &v, double b,
 // matSliders[row][col] maps to mElems[col*5 + row].
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SimpleReverb — Freeverb-style: 4 comb filters parallel + 2 allpass in series
+// ─────────────────────────────────────────────────────────────────────────────
+struct SimpleReverb {
+  static constexpr int NC = 4, NA = 2;
+  // Delay lengths tuned for 44100 Hz (prime-ish to avoid resonance overlap)
+  static constexpr int CD[NC] = {1116, 1188, 1277, 1356};
+  static constexpr int AD[NA] = {556, 441};
+
+  std::vector<float> cbuf[NC], abuf[NA];
+  int ci[NC]{}, ai[NA]{};
+  float cfbk[NC]{}, cstate[NC]{};  // comb feedback + lowpass state
+  float damp = 0.4f, afbk = 0.5f;
+
+  void init(float sr = 44100.f, float decaySec = 4.f) {
+    for (int i = 0; i < NC; i++) {
+      cbuf[i].assign(CD[i], 0.f);
+      cfbk[i] = std::pow(0.001f, CD[i] / (sr * decaySec));
+    }
+    for (int i = 0; i < NA; i++) abuf[i].assign(AD[i], 0.f);
+  }
+
+  float operator()(float in) {
+    float out = 0;
+    for (int i = 0; i < NC; i++) {
+      float d = cbuf[i][ci[i]];
+      cstate[i] = d * (1.f - damp) + cstate[i] * damp;
+      cbuf[i][ci[i]] = in + cstate[i] * cfbk[i];
+      ci[i] = (ci[i] + 1) % CD[i];
+      out += d;
+    }
+    out *= 0.25f;
+    for (int i = 0; i < NA; i++) {
+      float d = abuf[i][ai[i]];
+      abuf[i][ai[i]] = out + d * afbk;
+      ai[i] = (ai[i] + 1) % AD[i];
+      out = d - afbk * out;
+    }
+    return out;
+  }
+};
+
 struct AlloApp : DistributedApp {
 
 
@@ -162,7 +206,8 @@ struct AlloApp : DistributedApp {
   Parameter rotX    {"rotX",     0.0,    -1.0,    1.0};
   Parameter rotY    {"rotY",     1.0,    -1.0,    1.0};
   Parameter rotZ    {"rotZ",     0.0,    -1.0,    1.0};
-  ParameterBool rotPaused{"rotPaused", "", false};  // checked = freeze rotation
+  // Start paused by default
+  ParameterBool rotPaused{"rotPaused", "", true};  // checked = freeze rotation
 
   // ── 20 current-matrix sliders: matSliders[row][col] ──────────────────────
   Parameter matSliders[4][5] = {
@@ -198,6 +243,30 @@ struct AlloApp : DistributedApp {
   double blendT = 1.0;       // local blend progress [0,1]
   double blendSpeed = 0.02;
   bool dragged = false;
+
+  // ── Sonification ──────────────────────────────────────────────────────────
+  // Drone: 10 sine partials of A1 (55 Hz), amplitudes shaped by a 4D histogram
+  //   of the point cloud — each seed produces a distinct harmonic spectrum.
+  // Melody: one sine that walks through v[] each frame, mapping w → pitch in
+  //   [55–220 Hz] with a slow legato glide — gives continuous variation.
+  static constexpr int NUM_PARTIALS = 10;
+  static constexpr float FUNDAMENTAL_HZ = 55.0f;   // A1: partials 55–550 Hz
+  gam::Sine<>      partials[NUM_PARTIALS];
+  gam::Sine<>      lfos[NUM_PARTIALS];
+  gam::Sine<>      melody;                          // wanders through attractor trajectory
+  SimpleReverb     reverb;
+  float baseFreqs[NUM_PARTIALS]{};
+  float targetAmps[NUM_PARTIALS]{};
+  float smoothAmps[NUM_PARTIALS]{};
+  float melodyFreqTarget = 55.0f;
+  float melodyFreqSmooth = 55.0f;
+  float blendEnvelope = 0.0f;
+  size_t vWalkIdx = 0;
+  Parameter audioVolume{"audioVolume", 0.18f, 0.0f, 1.0f};
+  Parameter reverbWet{"reverbWet", 0.4f, 0.0f, 1.0f};
+  static constexpr float AMP_SMOOTH  = 0.003f;
+  static constexpr float FREQ_SMOOTH = 0.0008f;   // melody glide speed
+  int lastSeed = -1;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Slider <-> array helpers
@@ -355,8 +424,13 @@ struct AlloApp : DistributedApp {
       auto GUIdomain = GUIDomain::enableGUI(defaultWindowDomain());
       auto &gui = GUIdomain->newGUI();
 
-      presetHandler << camera; 
-      presetHandler << b << r << count;
+  presetHandler << camera; 
+  presetHandler << b << r << count;
+  // Include rotation parameters in presets
+  presetHandler << rotSpeed << rotPaused << rotX << rotY << rotZ;
+  // Also include seed/zooIndex/rotAngle and edit/blend state so presets
+  // restore the exact deterministic state and any pending transitions.
+  presetHandler << seed << zooIndex << rotAngle << matEditMode << blendActive;
       //presetHandler.setVerbose(true);
       //presetHandler.setSubDirectory("");
       presetHandler.setRootPath("./");
@@ -383,6 +457,8 @@ struct AlloApp : DistributedApp {
       gui.add(rotX);
       gui.add(rotY);
       gui.add(rotZ);
+      gui.add(audioVolume);
+      gui.add(reverbWet);
 
       for (int row = 0; row < 4; row++)
         for (int col = 0; col < 5; col++) {
@@ -394,6 +470,33 @@ struct AlloApp : DistributedApp {
             rebuildFromSliders();
           });
         }
+
+      // Register target sliders so blends/targets are stored as well.
+      for (int row = 0; row < 4; row++)
+        for (int col = 0; col < 5; col++) {
+          presetHandler << targetSliders[row][col];
+        }
+
+      // When the user stores a preset via the GUI, the PresetHandler will
+      // write the currently-registered parameter values to disk. We need
+      // to ensure the canonical matrix (currentMat) is captured in the
+      // m00..m34 parameter fields. The PresetHandler only offers a
+      // post-store callback, so we use that to snapshot and overwrite the
+      // stored preset with up-to-date slider values.
+      presetHandler.registerStoreCallback([this](int index, std::string name, void*) {
+        // Snapshot the current canonical matrix into the mat sliders
+        matToSliders();
+        // Build fresh ParameterStates from the currently-registered parameters
+        PresetHandler::ParameterStates values;
+        for (auto *pmeta : presetHandler.parameters()) {
+          std::vector<al::VariantValue> fields;
+          pmeta->getFields(fields);
+          values[pmeta->getFullAddress()] = fields;
+        }
+        // Overwrite the preset file with the updated values
+        presetHandler.savePresetValues(values, name, true);
+        printf("[preset] snapshot and re-saved preset '%s'\n", name.c_str());
+      });
 
       // Seed initial slider values from first zoo entry before first frame.
       Mat5d m;
@@ -491,6 +594,20 @@ struct AlloApp : DistributedApp {
   void onCreate() override {
     shader.compile(slurp("../vertex.glsl"), slurp("../fragment.glsl"),
                    slurp("../geometry.glsl"));
+    // Slight detune per partial so adjacent harmonics beat gently.
+    // LFOs staggered in rate (0.04–0.15 Hz) and phase so each partial
+    // breathes at its own pace — creates slow organic movement.
+    for (int n = 0; n < NUM_PARTIALS; n++) {
+      float detune = (n % 2 == 0 ? 1.0f : -1.0f) * 0.08f * n;
+      baseFreqs[n] = FUNDAMENTAL_HZ * (n + 1) + detune;
+      partials[n].freq(baseFreqs[n]);
+      float lfoRate = 0.04f + n * 0.012f;
+      lfos[n].freq(lfoRate);
+      lfos[n].phase((float)n / NUM_PARTIALS);
+      smoothAmps[n] = 0.0f;
+    }
+    melody.freq(55.0f);
+    reverb.init(audioIO().framesPerSecond(), 3.5f);
     Mat5d m;
     // Make near clipping plane smaller so close objects are not clipped
     lens().near(0.01);
@@ -511,6 +628,12 @@ struct AlloApp : DistributedApp {
     nav().faceToward(Vec3d(0, 0, 0), Vec3d(0, 1, 0));
     if (isPrimary()) {
       camera.set(nav());  // push immediately so secondary doesn't use its own default
+    }
+
+    // Ensure rotation starts paused unless a preset overrides it
+    // rotPaused default is true; presets will set it when loaded.
+    if (!rotPaused.get()) {
+      rotPaused.set(true);
     }
 
     guiReady = true;  // unlock callbacks on BOTH nodes after init
@@ -615,6 +738,92 @@ struct AlloApp : DistributedApp {
       }
     } else {
       nav().set(camera);
+    }
+
+    // ── Seed change detection (primary only) ─────────────────────────────
+    // When a preset loads a new seed the primary has no callback that calls
+    // rebuild(), so v[] stays stale. Detect the change here and rebuild.
+    if (isPrimary() && !matEditMode.get() && blendT >= 1.0) {
+      int curSeed = seed.get();
+      if (curSeed != lastSeed) {
+        lastSeed = curSeed;
+        rebuild();
+        matToSliders();
+      }
+    }
+
+    // ── Blend envelope: gentle swell when a transition is running ─────────
+    {
+      float blendTarget = (blendT < 1.0f) ? 1.0f : 0.0f;
+      float rate = (blendTarget > blendEnvelope) ? 0.3f : 0.005f;
+      blendEnvelope += rate * (blendTarget - blendEnvelope);
+    }
+
+    // ── Sonification: spectral mask + melody walk ─────────────────────────
+    if (isPrimary() && !v.empty()) {
+      float bv = b.get();
+
+      // Bin x, y, z, w into NUM_PARTIALS slices of [-b, b], sum all 4 dims.
+      float counts[NUM_PARTIALS]{};
+      for (auto &pt : v) {
+        float dims[4] = {(float)pt.x, (float)pt.y, (float)pt.z, (float)pt.w};
+        for (float d : dims) {
+          float norm = (d + bv) / (2.0f * bv);
+          norm = std::max(0.0f, std::min(0.9999f, norm));
+          counts[(int)(norm * NUM_PARTIALS)] += 1.0f;
+        }
+      }
+      // Normalize to total count (fraction per bin), then square to sharpen
+      // peaks — this makes each seed's spectrum clearly distinct: sparse
+      // bins go nearly silent, dense bins stay loud.
+      float total = (float)v.size() * 4.0f;
+      for (int n = 0; n < NUM_PARTIALS; n++) {
+        float frac = counts[n] / total;
+        targetAmps[n] = frac * frac * (float)(NUM_PARTIALS * NUM_PARTIALS);
+      }
+
+      // Walk through the trajectory one step per frame; the w value of the
+      // current point sets the melody pitch — natural variation from the
+      // attractor's own dynamics, changes character during blends.
+      vWalkIdx = (vWalkIdx + 11) % v.size();
+      float w = (float)v[vWalkIdx].w;
+      float norm = (w + bv) / (2.0f * bv);
+      // Map [0,1] → [55, 220] Hz (A1 to A3, two octaves)
+      melodyFreqTarget = 55.0f * std::pow(4.0f, norm);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // onSound — harmonic drone driven by the w-value histogram
+  // ─────────────────────────────────────────────────────────────────────────
+  void onSound(AudioIOData &io) override {
+    if (!isPrimary()) return;
+    float vol = audioVolume.get();
+    // Gentle volume swell during blend (1.5× max) — audible but not startling.
+    float blendBoost = 1.0f + 0.5f * blendEnvelope;
+    // Speed up amplitude smoothing during a blend so the spectral shift is
+    // clearly audible rather than lagging behind the visual transition.
+    float ampRate = AMP_SMOOTH + blendEnvelope * 0.04f;
+    float wet = reverbWet.get();
+    float dry = 1.0f - wet;
+    while (io()) {
+      // Melody: slow legato glide toward the current attractor w-pitch.
+      melodyFreqSmooth += FREQ_SMOOTH * (melodyFreqTarget - melodyFreqSmooth);
+      melody.freq(melodyFreqSmooth);
+      float mel = melody() * vol * blendBoost * 0.25f;
+
+      // Drone: harmonic partials shaped by the 4D histogram.
+      float drone = 0.0f;
+      for (int n = 0; n < NUM_PARTIALS; n++) {
+        smoothAmps[n] += ampRate * (targetAmps[n] - smoothAmps[n]);
+        float lfoVal = 0.75f + 0.25f * lfos[n]();
+        drone += partials[n]() * smoothAmps[n] * lfoVal;
+      }
+      drone *= vol * blendBoost * 0.75f / NUM_PARTIALS;
+
+      float s = mel + drone;
+      float out = dry * s + wet * reverb(s);
+      io.out(0) = io.out(1) = out;
     }
   }
 
