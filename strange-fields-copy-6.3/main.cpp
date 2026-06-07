@@ -249,9 +249,9 @@ struct AlloApp : DistributedApp {
   //   of the point cloud — each seed produces a distinct harmonic spectrum.
   // Melody: one sine that walks through v[] each frame, mapping w → pitch in
   //   [55–220 Hz] with a slow legato glide — gives continuous variation.
-  static constexpr int NUM_PARTIALS = 10;
-  static constexpr float FUNDAMENTAL_HZ = 55.0f;   // A1: partials 55–550 Hz
-  gam::Sine<>      partials[NUM_PARTIALS];
+  static constexpr int NUM_PARTIALS = 20;
+  static constexpr float FUNDAMENTAL_HZ = 10.0f;   // A1: partials 55–550 Hz
+  gam::Saw<>      partials[NUM_PARTIALS];
   gam::Sine<>      lfos[NUM_PARTIALS];
   gam::Sine<>      melody;                          // wanders through attractor trajectory
   SimpleReverb     reverb;
@@ -823,6 +823,8 @@ struct AlloApp : DistributedApp {
 
       float s = mel + drone;
       float out = dry * s + wet * reverb(s);
+      // Soft clip: tanh smoothly limits peaks without harsh distortion.
+      out = std::tanh(out);
       io.out(0) = io.out(1) = out;
     }
   }
