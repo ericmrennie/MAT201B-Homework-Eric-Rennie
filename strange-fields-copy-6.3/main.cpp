@@ -74,9 +74,10 @@ class Mat5d : public Mat<5, double> {
 // ─────────────────────────────────────────────────────────────────────────────
 // wrapture helpers
 // ─────────────────────────────────────────────────────────────────────────────
-double wrapture(std::vector<Vec4d> &v, double b, int seed, int count) {
-  Mat5d m;
-  m.coefficients(seed);
+
+// Shared iteration kernel: given a fully-constructed Mat5d, iterate and fill v.
+static double wraptureRun(std::vector<Vec4d> &v, double b, Mat5d &m, int seed,
+                          int count) {
   rnd::Random<> rng;
   rng.seed(seed);
   Vec5d x(rng.ball<Vec4d>(), 1);
@@ -90,23 +91,21 @@ double wrapture(std::vector<Vec4d> &v, double b, int seed, int count) {
   return determinant(m);
 }
 
+// Build matrix from seed, then run.
+double wrapture(std::vector<Vec4d> &v, double b, int seed, int count) {
+  Mat5d m;
+  m.coefficients(seed);
+  return wraptureRun(v, b, m, seed, count);
+}
+
+// Build matrix from a flat array, then run.
 double wraptureFromArray(std::vector<Vec4d> &v, double b,
                          std::array<double, 25> &mat, int seed, int count) {
   Mat5d m;
   for (int k = 0; k < 25; k++) m.elems()[k] = mat[k];
   m.elems()[4] = m.elems()[9] = m.elems()[14] = m.elems()[19] = 0;
   m.elems()[24] = 1;
-  rnd::Random<> rng;
-  rng.seed(seed);
-  Vec5d x(rng.ball<Vec4d>(), 1);
-  v.push_back(x.elems());
-  for (int i = 0; i < count; i++) {
-    x = m * x;
-    for (int k = 0; k < x.size() - 1; k++)
-      x.elems()[k] = gam::scl::wrap(x.elems()[k], b, -b);
-    v.push_back(x.elems());
-  }
-  return determinant(m);
+  return wraptureRun(v, b, m, seed, count);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +152,16 @@ struct AlloApp : DistributedApp {
   // Primary sets false when its own blend settles.
   ParameterBool blendActive{"blendActive", "", false};
 
+  // ── Rotation parameters ───────────────────────────────────────────────────
+  // rotSpeed: degrees per frame, controlled via GUI slider.
+  // rotAngle: synced each frame from primary so secondaries stay locked.
+  Parameter rotSpeed{"rotSpeed", 0.5,    -5.0,    5.0};
+  Parameter rotAngle{"rotAngle", 0.0, -1e9f,   1e9f};   // synced accumulator
+  Parameter rotX    {"rotX",     0.0,    -1.0,    1.0};
+  Parameter rotY    {"rotY",     1.0,    -1.0,    1.0};
+  Parameter rotZ    {"rotZ",     0.0,    -1.0,    1.0};
+  ParameterBool rotPaused{"rotPaused", "", false};  // checked = freeze rotation
+
   // ── 20 current-matrix sliders: matSliders[row][col] ──────────────────────
   Parameter matSliders[4][5] = {
       {{"m00", 0, -1, 1}, {"m01", 0, -1, 1}, {"m02", 0, -1, 1},
@@ -187,46 +196,43 @@ struct AlloApp : DistributedApp {
   double blendT = 1.0;       // local blend progress [0,1]
   double blendSpeed = 0.02;
   bool dragged = false;
-  double angle = 0;
 
   // ─────────────────────────────────────────────────────────────────────────
   // Slider <-> array helpers
+  //
+  // Both pairs (mat <-> matSliders, target <-> targetSliders) share the same
+  // nested-loop shape, so we parameterize over the slider bank and the array.
   // ─────────────────────────────────────────────────────────────────────────
 
-  void matToSliders() {
+  // Copy a 4×5 slider bank into a flat 25-element array (enforcing homogeneous row).
+  std::array<double, 25> slidersToArray(Parameter sliders[4][5],
+                                        const std::array<double, 25> &base) {
+    std::array<double, 25> a = base;
+    for (int row = 0; row < 4; row++)
+      for (int col = 0; col < 5; col++)
+        a[col * 5 + row] = (double)sliders[row][col].get();
+    a[4] = a[9] = a[14] = a[19] = 0.0;
+    a[24] = 1.0;
+    return a;
+  }
+
+  // Copy a flat 25-element array into a 4×5 slider bank.
+  // Optionally suppress guiReady so bulk sets don't trigger callbacks.
+  void arrayToSliders(const std::array<double, 25> &a, Parameter sliders[4][5],
+                      bool guardGui = false) {
     bool prev = guiReady;
-    guiReady = false;
+    if (guardGui) guiReady = false;
     for (int row = 0; row < 4; row++)
       for (int col = 0; col < 5; col++)
-        matSliders[row][col].set((float)currentMat[col * 5 + row]);
-    guiReady = prev;
+        sliders[row][col].set((float)a[col * 5 + row]);
+    if (guardGui) guiReady = prev;
   }
 
-  void targetToTargetSliders() {
-    for (int row = 0; row < 4; row++)
-      for (int col = 0; col < 5; col++)
-        targetSliders[row][col].set((float)targetMat[col * 5 + row]);
-  }
-
-  std::array<double, 25> slidersToArray() {
-    std::array<double, 25> a = currentMat;
-    for (int row = 0; row < 4; row++)
-      for (int col = 0; col < 5; col++)
-        a[col * 5 + row] = (double)matSliders[row][col].get();
-    a[4] = a[9] = a[14] = a[19] = 0.0;
-    a[24] = 1.0;
-    return a;
-  }
-
-  std::array<double, 25> targetSlidersToArray() {
-    std::array<double, 25> a = targetMat;
-    for (int row = 0; row < 4; row++)
-      for (int col = 0; col < 5; col++)
-        a[col * 5 + row] = (double)targetSliders[row][col].get();
-    a[4] = a[9] = a[14] = a[19] = 0.0;
-    a[24] = 1.0;
-    return a;
-  }
+  // Convenience wrappers that preserve the original call-site names.
+  void matToSliders()        { arrayToSliders(currentMat, matSliders, /*guardGui=*/true); }
+  void targetToTargetSliders() { arrayToSliders(targetMat, targetSliders); }
+  std::array<double, 25> slidersToArray()       { return slidersToArray(matSliders,    currentMat); }
+  std::array<double, 25> targetSlidersToArray() { return slidersToArray(targetSliders, targetMat);  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Rebuild helpers
@@ -276,6 +282,47 @@ struct AlloApp : DistributedApp {
     blendT = 1.0;
   }
 
+  // Shared handler body for b and count changes (both nodes).
+  void onParamChange() {
+    if (!guiReady) return;
+    if (matEditMode.get()) {
+      rebuildFromSliders();
+    } else if (isPrimary()) {
+      rebuild();
+      matToSliders();
+    } else {
+      rebuildFromSeed(seed.get());
+      matToSliders();
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Zoo navigation (primary only)
+  //   delta: +1 = forward, -1 = backward
+  //   blend: true = animated lerp, false = immediate snap
+  // ─────────────────────────────────────────────────────────────────────────
+  void navigateZoo(int delta, bool blend) {
+    matEditMode = false;
+    int nextIdx = ((zooIndex.get() + delta) + (int)zoo.size()) % (int)zoo.size();
+    zooIndex.set(nextIdx);
+    seed.set(zoo[nextIdx]);
+
+    if (blend) {
+      Mat5d m;
+      m.coefficients(seed.get());
+      targetMat = m.toArray();
+      targetToTargetSliders();
+      blendActive.set(false);  // reset edge so callback fires again
+      blendT = 0.0;
+      blendActive.set(true);
+      printf("zoo [%d/%lu] seed:%d\n", nextIdx, zoo.size(), (int)seed.get());
+    } else {
+      blendT = 0.0;
+      rebuild();
+      matToSliders();
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Save
   // ─────────────────────────────────────────────────────────────────────────
@@ -323,11 +370,16 @@ struct AlloApp : DistributedApp {
       gui.add(b);
       gui.add(r);
       gui.add(count);
+      gui.add(rotSpeed);
+      gui.add(rotPaused);
+      gui.add(rotX);
+      gui.add(rotY);
+      gui.add(rotZ);
 
       for (int row = 0; row < 4; row++)
         for (int col = 0; col < 5; col++) {
           gui.add(matSliders[row][col]);
-          presetHandler <<matSliders[row][col];
+          presetHandler << matSliders[row][col];
           matSliders[row][col].registerChangeCallback([this](float) {
             if (!guiReady) return;
             matEditMode = true;
@@ -345,6 +397,7 @@ struct AlloApp : DistributedApp {
     // ── Register everything with parameterServer ───────────────────────────
     parameterServer() << b << r << count << camera;
     parameterServer() << seed << zooIndex << matEditMode << blendActive;
+    parameterServer() << rotSpeed << rotAngle << rotX << rotY << rotZ << rotPaused;
 
     for (int row = 0; row < 4; row++)
       for (int col = 0; col < 5; col++) {
@@ -395,37 +448,10 @@ struct AlloApp : DistributedApp {
       }
     });
 
-    // ── Bug fix: rebuild when b changes (both nodes) ──────────────────────
-    // At low b the wrap range is tiny; stale vertices divided by b in onDraw
-    // fly off screen. We must regenerate the point cloud with the new b.
-    b.registerChangeCallback([this](float) {
-      if (!guiReady) return;
-      if (matEditMode.get()) {
-        rebuildFromSliders();
-      } else if (isPrimary()) {
-        rebuild();
-        matToSliders();
-      } else {
-        rebuildFromSeed(seed.get());
-        matToSliders();
-      }
-    });
-
-    // ── Bug fix: rebuild when count changes (both nodes) ──────────────────
-    // count is a Parameter<float> cast to int at call sites; changing it in
-    // the GUI never triggered a rebuild in the new code (lastknown was removed).
-    count.registerChangeCallback([this](float) {
-      if (!guiReady) return;
-      if (matEditMode.get()) {
-        rebuildFromSliders();
-      } else if (isPrimary()) {
-        rebuild();
-        matToSliders();
-      } else {
-        rebuildFromSeed(seed.get());
-        matToSliders();
-      }
-    });
+    // ── Bug fix: rebuild when b or count changes (both nodes) ─────────────
+    // Both parameters trigger identical logic, so they share onParamChange().
+    b.registerChangeCallback([this](float) { onParamChange(); });
+    count.registerChangeCallback([this](float) { onParamChange(); });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -463,63 +489,20 @@ struct AlloApp : DistributedApp {
   bool onKeyDown(const Keyboard &k) override {
     if (!isPrimary()) return true;
 
-        if (k.key() == '0') {
-      // Notice that you don't need to add the extension ".sequence" to the name
+    if (k.key() == '0') {
       presetSequencer.playSequence("foo");
-    }
 
-    if (k.key() == ' ') {
-      // Next zoo entry — immediate snap (no blend)
-      matEditMode = false;
-      int nextIdx = (zooIndex.get() + 1) % (int)zoo.size();
-      zooIndex.set(nextIdx);
-      seed.set(zoo[nextIdx]);
-      blendT = 0.0;
-      rebuild();
-      matToSliders();
+    } else if (k.key() == ' ') {
+      navigateZoo(+1, /*blend=*/false);   // next zoo entry — immediate snap
 
     } else if (k.key() == Keyboard::BACKSPACE) {
-      // Previous zoo entry — immediate snap
-      matEditMode = false;
-      int nextIdx = (zooIndex.get() - 1 + (int)zoo.size()) % (int)zoo.size();
-      zooIndex.set(nextIdx);
-      seed.set(zoo[nextIdx]);
-      blendT = 0.0;
-      rebuild();
-      matToSliders();
+      navigateZoo(-1, /*blend=*/false);   // previous zoo entry — immediate snap
 
     } else if (k.key() == 'p') {
-      // Next zoo entry — animated blend
-      matEditMode = false;
-      int nextIdx = (zooIndex.get() + 1) % (int)zoo.size();
-      zooIndex.set(nextIdx);
-      seed.set(zoo[nextIdx]);
-      Mat5d m;
-      m.coefficients(seed.get());
-      targetMat = m.toArray();
-
-      // Tell secondaries what to blend toward, then fire the signal.
-      targetToTargetSliders();
-      blendActive.set(false);  // reset edge so callback fires again
-      blendT = 0.0;
-      blendActive.set(true);
-      printf("zoo [%d/%lu] seed:%d\n", nextIdx, zoo.size(), (int)seed.get());
+      navigateZoo(+1, /*blend=*/true);    // next zoo entry — animated blend
 
     } else if (k.key() == 'o') {
-      // Previous zoo entry — animated blend
-      matEditMode = false;
-      int nextIdx = (zooIndex.get() - 1 + (int)zoo.size()) % (int)zoo.size();
-      zooIndex.set(nextIdx);
-      seed.set(zoo[nextIdx]);
-      Mat5d m;
-      m.coefficients(seed.get());
-      targetMat = m.toArray();
-
-      targetToTargetSliders();
-      blendActive.set(false);
-      blendT = 0.0;
-      blendActive.set(true);
-      printf("zoo [%d/%lu] seed:%d\n", nextIdx, zoo.size(), (int)seed.get());
+      navigateZoo(-1, /*blend=*/true);    // previous zoo entry — animated blend
 
     } else if (k.key() == 'l' || k.key() == 'L') {
       // Reset sliders to current seed
@@ -544,7 +527,11 @@ struct AlloApp : DistributedApp {
   // onAnimate
   // ─────────────────────────────────────────────────────────────────────────
   void onAnimate(double dt) override {
-    angle += 0.07;
+    // Primary owns the accumulator and pushes it to secondaries every frame.
+    // Secondaries receive it via parameterServer — no local increment needed.
+    if (isPrimary() && !rotPaused.get()) {
+      rotAngle.set(rotAngle.get() + rotSpeed.get());
+    }
 
     // ── Blend transition (both nodes run the same lerp logic) ──────────────
     if (!matEditMode && blendT < 1.0) {
@@ -602,10 +589,13 @@ struct AlloApp : DistributedApp {
     g.shader().uniform("b", b);
     g.shader().uniform("r", r);
     g.clear(0);
-    Mesh m{Mesh::POINTS};
-    // Raw vertices in [-b,b] space; vertex shader divides by b to normalize.
-    for (auto &vertex : v) m.vertex(vertex);
-    g.draw(m);
+    g.pushMatrix();
+      g.rotate(rotAngle.get(), rotX.get(), rotY.get(), rotZ.get());
+      Mesh m{Mesh::POINTS};
+      // Raw vertices in [-b,b] space; vertex shader divides by b to normalize.
+      for (auto &vertex : v) m.vertex(vertex);
+      g.draw(m);
+    g.popMatrix();
   }
 };
 
