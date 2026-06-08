@@ -118,6 +118,70 @@ double wraptureFromArray(std::vector<Vec4d> &v, double b,
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Granular synthesis helpers (no Gamma dependency beyond gam::Sine)
+// ─────────────────────────────────────────────────────────────────────────────
+struct GrainEnv {
+  float val = 0, inc = 0;
+  int atkSamp = 0, dcySamp = 0, remaining = 0;
+  enum { IDLE, ATTACK, DECAY } phase = IDLE;
+
+  void trigger(float atkSec, float dcySec, float sr = 44100.f) {
+    atkSamp = std::max(1, (int)(atkSec * sr));
+    dcySamp = std::max(1, (int)(dcySec * sr));
+    val = 0.f;  inc = 1.f / atkSamp;
+    phase = ATTACK;
+  }
+  float operator()() {
+    if (phase == IDLE) return 0.f;
+    val += inc;
+    if (phase == ATTACK && val >= 1.f) {
+      val = 1.f;  inc = -1.f / dcySamp;  phase = DECAY;
+    } else if (phase == DECAY && val <= 0.f) {
+      val = 0.f;  phase = IDLE;
+    }
+    return val;
+  }
+  bool done() const { return phase == IDLE; }
+};
+
+struct Grain {
+  gam::Sine<> osc;
+  GrainEnv    env;
+  bool active = false;
+  void trigger(float hz, float atkSec, float dcySec) {
+    osc.freq(hz);
+    env.trigger(atkSec, dcySec);
+    active = true;
+  }
+  float operator()() {
+    if (!active) return 0.f;
+    float s = osc() * env();
+    if (env.done()) active = false;
+    return s;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resonator — classic 2-pole resonant band-pass (no Gamma dependency)
+//   freq : center frequency in Hz
+//   res  : pole radius [0,1) — closer to 1 = narrower, longer ring
+// ─────────────────────────────────────────────────────────────────────────────
+struct Resonator {
+  float y1 = 0, y2 = 0, a1 = 0, a2 = 0, gain = 1;
+  void set(float freq, float res, float sr = 44100.f) {
+    float w = 2.f * float(M_PI) * freq / sr;
+    a1   = 2.f * res * std::cos(w);
+    a2   = -(res * res);
+    gain = (1.f - res * res) * 0.5f;  // normalise peak to ~1
+  }
+  float operator()(float x) {
+    float y = gain * x + a1 * y1 + a2 * y2;
+    y2 = y1;  y1 = y;
+    return y;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SimpleReverb — Freeverb-style: 4 comb filters parallel + 2 allpass in series
 // ─────────────────────────────────────────────────────────────────────────────
 struct SimpleReverb {
@@ -267,6 +331,50 @@ struct AlloApp : DistributedApp {
   static constexpr float AMP_SMOOTH  = 0.003f;
   static constexpr float FREQ_SMOOTH = 0.0008f;   // melody glide speed
   int lastSeed = -1;
+
+  // ── FM Synthesis ──────────────────────────────────────────────────────────
+  // 4 operator pairs, one per matrix row. Each row's column values drive:
+  //   col 0 → modulator frequency ratio  [0.5 – 3.0]
+  //   col 2 → modulation index           [0 – 8]
+  //   |col 1| → FM voice amplitude       [0 – 1]
+  // displayedMat tracks the live lerped matrix so FM morphs during blends.
+  std::array<double, 25> displayedMat{};
+  gam::Sine<> fmCarriers[4];
+  gam::Sine<> fmMods[4];
+  float fmRatioTarget[4]{};   float fmRatio[4]{};
+  float fmIndexTarget[4]{};   float fmIndex[4]{};
+  float fmAmpTarget[4]{};     float fmAmp[4]{};
+  Parameter fmVolume{"fmVolume", 0.0f, 0.0f, 1.0f};
+  static constexpr float FM_SMOOTH = 0.001f;
+
+  // ── Modal resonator bank ──────────────────────────────────────────────────
+  // Pink noise through 5 gam::Reson filters (one per matrix column).
+  // Each column's mean absolute value maps logarithmically to a center freq
+  // in [80, 1500] Hz — the matrix literally becomes a set of resonant modes.
+  static constexpr int NUM_RESONATORS = 5;
+  gam::NoiseWhite<> resonNoise;
+  Resonator        resonators[NUM_RESONATORS];
+  float resonFreqTarget[NUM_RESONATORS]{};
+  float resonFreq[NUM_RESONATORS]{};
+  Parameter resonVolume{"resonVolume", 0.0f, 0.0f, 1.0f};
+  Parameter resonQ{"resonQ", 0.97f, 0.5f, 0.999f};
+  static constexpr float RESON_SMOOTH = 0.002f;
+
+  // ── Granular synthesis ────────────────────────────────────────────────────
+  // Each grain is a short sine burst (attack + decay) pitched from a w value
+  // sampled from v[]. A wRing[] snapshot is filled by onAnimate so onSound
+  // can read frequencies without touching v[] across threads.
+  static constexpr int MAX_GRAINS  = 16;
+  static constexpr int W_RING_SIZE = 2048;
+  Grain  grains[MAX_GRAINS];
+  float  wRing[W_RING_SIZE]{};    // freq values snapshotted each frame
+  int    wRingSize = 0;
+  int    grainCounter = 0;        // samples until next grain trigger
+  uint32_t grainRng = 12345u;     // fast LCG — audio-thread safe, no stdlib rand
+  float  sampleRate = 44100.f;    // cached from onCreate
+  Parameter grainVolume{"grainVolume", 0.0f,   0.0f, 1.0f};
+  Parameter grainRate  {"grainRate",  30.f,    1.f,  200.f}; // grains/sec
+  Parameter grainSize  {"grainSize",  0.04f, 0.005f, 0.25f}; // seconds
 
   // ─────────────────────────────────────────────────────────────────────────
   // Slider <-> array helpers
@@ -459,6 +567,12 @@ struct AlloApp : DistributedApp {
       gui.add(rotZ);
       gui.add(audioVolume);
       gui.add(reverbWet);
+      gui.add(fmVolume);
+      gui.add(resonVolume);
+      gui.add(resonQ);
+      gui.add(grainVolume);
+      gui.add(grainRate);
+      gui.add(grainSize);
 
       for (int row = 0; row < 4; row++)
         for (int col = 0; col < 5; col++) {
@@ -607,7 +721,8 @@ struct AlloApp : DistributedApp {
       smoothAmps[n] = 0.0f;
     }
     melody.freq(55.0f);
-    reverb.init(audioIO().framesPerSecond(), 3.5f);
+    sampleRate = (float)audioIO().framesPerSecond();
+    reverb.init(sampleRate, 3.5f);
     Mat5d m;
     // Make near clipping plane smaller so close objects are not clipped
     lens().near(0.01);
@@ -699,6 +814,7 @@ struct AlloApp : DistributedApp {
       lerpedMat[4] = lerpedMat[9] = lerpedMat[14] = lerpedMat[19] = 0.0;
       lerpedMat[24] = 1.0;
 
+      displayedMat = lerpedMat;   // FM params follow the live lerp
       v.clear();
       wraptureFromArray(v, b, lerpedMat, seed.get(), count);
 
@@ -716,6 +832,9 @@ struct AlloApp : DistributedApp {
         }
       }
     }
+
+    // Keep displayedMat current when not in a blend
+    if (blendT >= 1.0) displayedMat = currentMat;
 
     // ── Mouse-drag triggered rebuild (primary only) ────────────────────────
     if (isPrimary() && !matEditMode && dragged) {
@@ -790,6 +909,48 @@ struct AlloApp : DistributedApp {
       float norm = (w + bv) / (2.0f * bv);
       // Map [0,1] → [55, 220] Hz (A1 to A3, two octaves)
       melodyFreqTarget = 55.0f * std::pow(4.0f, norm);
+
+      // Snapshot w→frequency values into wRing for the grain engine.
+      // Map w from [-b,b] → [55, 880] Hz (3 octaves, A1–A5).
+      wRingSize = std::min((int)v.size(), W_RING_SIZE);
+      for (int i = 0; i < wRingSize; i++) {
+        float wv = (float)v[i].w;
+        float fn = (wv + bv) / (2.f * bv);
+        fn = std::max(0.f, std::min(1.f, fn));
+        wRing[i] = 55.f * std::pow(16.f, fn);  // [55, 880] Hz
+      }
+    }
+
+    // ── FM target params from displayedMat (primary only) ─────────────────
+    // Each of the 4 matrix rows drives one FM operator pair:
+    //   col 0  → modulator ratio  (maps [-1,1] → [0.5, 3.0])
+    //   col 2  → modulation index (maps [-1,1] → [0, 8])
+    //   |col 1|→ voice amplitude  (maps [0,1]  → [0, 1])
+    if (isPrimary()) {
+      for (int row = 0; row < 4; row++) {
+        double v0 = displayedMat[0 * 5 + row];  // col 0
+        double v1 = displayedMat[1 * 5 + row];  // col 1
+        double v2 = displayedMat[2 * 5 + row];  // col 2
+        fmRatioTarget[row] = 0.5f + (float)((v0 + 1.0) / 2.0 * 2.5);  // [0.5, 3.0]
+        fmIndexTarget[row] = (float)((v2 + 1.0) / 2.0 * 8.0);         // [0, 8]
+        fmAmpTarget[row]   = (float)std::abs(v1);                       // [0, 1]
+      }
+    }
+
+    // ── Resonator center frequencies from matrix column means (primary) ────
+    // Each of the 5 columns contributes one resonant mode. The mean absolute
+    // value of the 4 row elements in that column is mapped logarithmically to
+    // [80, 1500] Hz — columns with large values ring at high frequencies,
+    // columns near zero ring deep.
+    if (isPrimary()) {
+      for (int col = 0; col < NUM_RESONATORS; col++) {
+        double mean = 0;
+        for (int row = 0; row < 4; row++)
+          mean += std::abs(displayedMat[col * 5 + row]);
+        mean /= 4.0;
+        // Logarithmic map: [0,1] → [80, 1500] Hz
+        resonFreqTarget[col] = 80.0f * std::pow(1500.0f / 80.0f, (float)mean);
+      }
     }
   }
 
@@ -821,7 +982,68 @@ struct AlloApp : DistributedApp {
       }
       drone *= vol * blendBoost * 0.75f / NUM_PARTIALS;
 
-      float s = mel + drone;
+      // FM layer: 4 operator pairs driven by matrix rows.
+      // Modulator output scales the carrier's instantaneous frequency,
+      // producing sidebands whose density depends on the modulation index.
+      float fmOut = 0.0f;
+      float fmVol = fmVolume.get();
+      if (fmVol > 0.0f) {
+        for (int row = 0; row < 4; row++) {
+          fmRatio[row] += FM_SMOOTH * (fmRatioTarget[row] - fmRatio[row]);
+          fmIndex[row] += FM_SMOOTH * (fmIndexTarget[row] - fmIndex[row]);
+          fmAmp[row]   += FM_SMOOTH * (fmAmpTarget[row]   - fmAmp[row]);
+          float carrHz = FUNDAMENTAL_HZ * (row + 1);
+          float modHz  = carrHz * fmRatio[row];
+          fmMods[row].freq(modHz);
+          // Classic FM: carrier frequency = fc + index * fm * modulator sample
+          fmCarriers[row].freq(carrHz + fmIndex[row] * modHz * fmMods[row]());
+          fmOut += fmCarriers[row]() * fmAmp[row];
+        }
+        fmOut *= fmVol * 0.25f;  // scale: 4 voices summed, keep headroom
+      }
+
+      // Modal resonator bank: pink noise excited by 5 column-driven resonators.
+      // High resonQ = narrow bandwidth = long ringing modes (like struck metal).
+      // Low resonQ  = wide bandwidth  = dense, noisy formants.
+      float resonOut = 0.0f;
+      float resonVol = resonVolume.get();
+      if (resonVol > 0.0f) {
+        float q = resonQ.get();
+        float noise = resonNoise();
+        for (int c = 0; c < NUM_RESONATORS; c++) {
+          resonFreq[c] += RESON_SMOOTH * (resonFreqTarget[c] - resonFreq[c]);
+          resonators[c].set(resonFreq[c], q);
+          resonOut += resonators[c](noise);
+        }
+        resonOut *= resonVol * 0.2f;
+      }
+
+      // Granular cloud: short sine bursts pitched from the attractor trajectory.
+      float grainOut = 0.f;
+      float grainVol = grainVolume.get();
+      if (grainVol > 0.f && wRingSize > 0) {
+        // Count down to next grain trigger.
+        if (--grainCounter <= 0) {
+          int sPerGrain = std::max(1, (int)(sampleRate / grainRate.get()));
+          grainCounter = sPerGrain;
+          // Find a free grain slot.
+          for (int g = 0; g < MAX_GRAINS; g++) {
+            if (!grains[g].active) {
+              // LCG for thread-safe pseudo-random index into wRing.
+              grainRng = grainRng * 1664525u + 1013904223u;
+              int idx = (int)(grainRng >> 21) % wRingSize;
+              float dur = grainSize.get();
+              grains[g].trigger(wRing[idx], dur * 0.3f, dur * 0.7f);
+              break;
+            }
+          }
+        }
+        for (int g = 0; g < MAX_GRAINS; g++)
+          grainOut += grains[g]();
+        grainOut *= grainVol / MAX_GRAINS;
+      }
+
+      float s = mel + drone + fmOut + resonOut + grainOut;
       float out = dry * s + wet * reverb(s);
       // Soft clip: tanh smoothly limits peaks without harsh distortion.
       out = std::tanh(out);
