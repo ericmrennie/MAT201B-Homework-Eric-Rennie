@@ -273,6 +273,13 @@ struct AlloApp : DistributedApp {
   // Start paused by default
   ParameterBool rotPaused{"rotPaused", "", true};  // checked = freeze rotation
 
+  // ── Inner (differential) spin — GPU-side per-point XY rotation ───────────
+  // Each point rotates by innerSpin * dist(from Z axis) degrees, so outer
+  // arms sweep faster than the core — galactic differential rotation.
+  Parameter innerSpinSpeed{"innerSpinSpeed", 0.0, -10.0, 10.0};
+  Parameter innerSpin     {"innerSpin",      0.0, -1e9f, 1e9f};  // accumulator
+  ParameterBool innerSpinPaused{"innerSpinPaused", "", true};
+
   // ── 20 current-matrix sliders: matSliders[row][col] ──────────────────────
   Parameter matSliders[4][5] = {
       {{"m00", 0, -1, 1}, {"m01", 0, -1, 1}, {"m02", 0, -1, 1},
@@ -536,9 +543,15 @@ struct AlloApp : DistributedApp {
   presetHandler << b << r << count;
   // Include rotation parameters in presets
   presetHandler << rotSpeed << rotPaused << rotX << rotY << rotZ;
+  presetHandler << innerSpinSpeed << innerSpinPaused;
   // Also include seed/zooIndex/rotAngle and edit/blend state so presets
   // restore the exact deterministic state and any pending transitions.
   presetHandler << seed << zooIndex << rotAngle << matEditMode << blendActive;
+  // Audio parameters — stored and restored per preset
+  presetHandler << audioVolume << reverbWet;
+  presetHandler << fmVolume;
+  presetHandler << resonVolume << resonQ;
+  presetHandler << grainVolume << grainRate << grainSize;
       //presetHandler.setVerbose(true);
       //presetHandler.setSubDirectory("");
       presetHandler.setRootPath("./");
@@ -565,6 +578,8 @@ struct AlloApp : DistributedApp {
       gui.add(rotX);
       gui.add(rotY);
       gui.add(rotZ);
+      gui.add(innerSpinSpeed);
+      gui.add(innerSpinPaused);
       gui.add(audioVolume);
       gui.add(reverbWet);
       gui.add(fmVolume);
@@ -637,6 +652,7 @@ struct AlloApp : DistributedApp {
       blendT = 0.0;
       blendActive.set(true);
     parameterServer() << rotSpeed << rotAngle << rotX << rotY << rotZ << rotPaused;
+    parameterServer() << innerSpinSpeed << innerSpin << innerSpinPaused;
 
     for (int row = 0; row < 4; row++)
       for (int col = 0; col < 5; col++) {
@@ -700,6 +716,12 @@ struct AlloApp : DistributedApp {
     // Both parameters trigger identical logic, so they share onParamChange().
     b.registerChangeCallback([this](float) { onParamChange(); });
     count.registerChangeCallback([this](float) { onParamChange(); });
+
+    // Reset innerSpin accumulator to 0 whenever the spin is paused so the
+    // original matrix shape is restored immediately.
+    innerSpinPaused.registerChangeCallback([this](float paused) {
+      if (paused > 0.5f) innerSpin.set(0.f);
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -802,6 +824,8 @@ struct AlloApp : DistributedApp {
     // Secondaries receive it via parameterServer — no local increment needed.
     if (isPrimary() && !rotPaused.get()) {
       rotAngle.set(rotAngle.get() + rotSpeed.get());
+    if (isPrimary() && !innerSpinPaused.get())
+      innerSpin.set(innerSpin.get() + innerSpinSpeed.get());
     }
 
     // ── Blend transition (both nodes run the same lerp logic) ──────────────
@@ -1058,6 +1082,7 @@ struct AlloApp : DistributedApp {
     g.shader(shader);
     g.shader().uniform("b", b);
     g.shader().uniform("r", r);
+    g.shader().uniform("innerSpin", innerSpin.get());
     g.clear(0);
     g.pushMatrix();
       g.rotate(rotAngle.get(), rotX.get(), rotY.get(), rotZ.get());
