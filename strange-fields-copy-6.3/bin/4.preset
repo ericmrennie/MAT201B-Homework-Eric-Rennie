@@ -1,5 +1,5 @@
 ::4
-/audioVolume f 0.085000 
+/audioVolume f 0.000000 
 /b f 2.693000 
 /blendActive i 0 
 /cam fffffff 0.000000 0.000000 5.375230 1.000000 0.000000 0.000000 0.000000 
@@ -29,12 +29,12 @@
 /m31 f -0.838990 
 /m32 f 0.673969 
 /m33 f -0.558289 
-/m34 f -0.425514 
+/m34 f -0.435923 
 /matEditMode i 0 
 /r f 0.005000 
 /resonQ f 0.995000 
-/resonVolume f 0.684000 
-/reverbWet f 1.000000 
+/resonVolume f 0.475000 
+/reverbWet f 0.762000 
 /rotAngle f 22320.449219 
 /rotPaused i 0 
 /rotSpeed f 0.000000 
