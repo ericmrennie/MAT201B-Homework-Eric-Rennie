@@ -1,14 +1,14 @@
 ::5
 /audioVolume f 0.000000 
-/b f 4.103000 
+/b f 0.791000 
 /blendActive i 0 
-/cam fffffff 0.000000 0.000000 0.000000 1.000000 0.000000 0.000000 0.000000 
+/cam fffffff 0.000000 -0.000000 4.625000 1.000000 0.000000 0.000000 0.000000 
 /count f 101350.429688 
 /fmVolume f 0.735000 
 /grainRate f 84.342003 
 /grainSize f 0.138000 
 /grainVolume f 1.000000 
-/innerSpinPaused i 0 
+/innerSpinPaused i 1 
 /innerSpinSpeed f 7.521000 
 /m00 f -0.101995 
 /m01 f -0.690302 
@@ -35,8 +35,8 @@
 /resonQ f 0.999000 
 /resonVolume f 0.120000 
 /reverbWet f 0.521000 
-/rotAngle f 14912.000000 
-/rotPaused i 0 
+/rotAngle f 15299.500000 
+/rotPaused i 1 
 /rotSpeed f 0.500000 
 /rotX f 0.000000 
 /rotY f 1.000000 
