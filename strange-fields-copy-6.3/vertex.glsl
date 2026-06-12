@@ -1,3 +1,5 @@
+// GLSL written by Karl Yerkes
+
 #version 400
 layout(location = 0) in vec4 aPosition;
 uniform mat4 al_ModelViewMatrix;

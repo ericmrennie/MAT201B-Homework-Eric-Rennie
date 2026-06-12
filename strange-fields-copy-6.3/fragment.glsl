@@ -1,3 +1,5 @@
+// GLSL written by Karl Yerkes
+
 #version 400
 
 uniform float b;
